@@ -1,0 +1,6 @@
+{
+  "name": "ProvaPack",
+  "description": "Dossiê verificável de embalagem e envio para vendedores do Mercado Livre, Shopee, Amazon e e-commerce.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
