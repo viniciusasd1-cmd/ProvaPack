@@ -49,21 +49,16 @@ export async function generateDossierPDF(dossier: Dossier): Promise<void> {
 
   doc.setTextColor(15, 23, 42);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9);
-  doc.text('FINALIDADE DO DOCUMENTO & CLÁUSULA DE MEDIAÇÃO:', margin + 3, currentY + 5);
+  doc.setFontSize(8.5);
+  doc.text('AVISO & ESCOPO DA PROVA:', margin + 3, currentY + 5);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7.5);
   doc.setTextColor(71, 85, 105);
   doc.text(
-    'Este dossiê documenta o processo contínuo e ininterrupto de conferência e lacração do envio, com validação de hash criptográfico.',
+    'Este documento comprova o estado do produto e embalagem no momento da gravação. O ProvaPack não se responsabiliza pelo transporte ou entrega.',
     margin + 3,
-    currentY + 9.5
-  );
-  doc.text(
-    'O ProvaPack atua como Prova-como-Serviço para subsidiar disputas no marketplace, sem garantia estrita de aceitação pela mediação externa.',
-    margin + 3,
-    currentY + 13.5
+    currentY + 10
   );
 
   currentY += 21;
@@ -159,21 +154,48 @@ export async function generateDossierPDF(dossier: Dossier): Promise<void> {
 
   currentY += 38;
 
-  // Cryptographic Hash Box
+  // Cryptographic Hashes Box (Original and ProvaPack)
   doc.setFillColor(15, 23, 42);
-  doc.roundedRect(margin, currentY, pageWidth - (margin * 2), 16, 1.5, 1.5, 'F');
+  doc.roundedRect(margin, currentY, pageWidth - (margin * 2), 24, 1.5, 1.5, 'F');
 
   doc.setTextColor(56, 189, 248);
   doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7);
+  doc.text('SHA-256 DO VÍDEO ORIGINAL (GRAVAÇÃO BRUTA PRESERVADA):', margin + 3, currentY + 4.5);
+
+  doc.setTextColor(248, 250, 252);
+  doc.setFont('courier', 'normal');
   doc.setFontSize(7.5);
-  doc.text('HASH CRIPTOGRÁFICO DE INTEGRIDADE (SHA-256 DO VÍDEO ORIGINAL):', margin + 3, currentY + 5);
+  doc.text(dossier.originalSha256 || dossier.fileHashSha256, margin + 3, currentY + 9);
+
+  doc.setTextColor(52, 211, 153); // emerald-400
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7);
+  doc.text('SHA-256 DO VÍDEO PROVAPACK (COM MARCA D\'ÁGUA E CARIMBO NOS FRAMES):', margin + 3, currentY + 14.5);
 
   doc.setTextColor(248, 250, 252);
   doc.setFont('courier', 'bold');
-  doc.setFontSize(8.5);
-  doc.text(dossier.fileHashSha256 || '9f83a45c2e176b9a84d319e07f66a12b4892cfa76e902b1f8c4e78a94b3210aa', margin + 3, currentY + 11.5);
+  doc.setFontSize(7.5);
+  doc.text(dossier.processedSha256 || dossier.fileHashSha256, margin + 3, currentY + 19);
 
-  currentY += 21;
+  currentY += 28;
+
+  // Validation Link banner
+  const validationUrl = `${typeof window !== 'undefined' ? window.location.origin : 'https://provapack.app'}/#public-${dossier.id}`;
+  doc.setFillColor(241, 245, 249);
+  doc.setDrawColor(203, 213, 225);
+  doc.roundedRect(margin, currentY, pageWidth - (margin * 2), 9, 1, 1, 'FD');
+
+  doc.setTextColor(15, 23, 42);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7);
+  doc.text('PORTAL PÚBLICO DE VALIDAÇÃO:', margin + 3, currentY + 5.5);
+
+  doc.setTextColor(2, 132, 199);
+  doc.setFont('helvetica', 'normal');
+  doc.text(validationUrl, margin + 52, currentY + 5.5);
+
+  currentY += 13;
 
   // Product & Accessories Row
   doc.setFont('helvetica', 'bold');

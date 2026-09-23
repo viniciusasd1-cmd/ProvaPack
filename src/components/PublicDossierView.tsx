@@ -164,21 +164,29 @@ export const PublicDossierView: React.FC<PublicDossierViewProps> = ({
             </div>
 
             {/* Cryptographic Hash Box */}
-            <div className="mt-4 p-4 rounded-2xl bg-slate-950 border border-slate-800">
-              <div className="flex items-center gap-2 text-xs font-bold text-sky-400 uppercase tracking-wider">
-                <Hash className="w-4 h-4" />
-                <span>Assinatura Digital (SHA-256 do Vídeo com Marca D'Água Permanente)</span>
-              </div>
-              <div className="mt-1 text-xs font-mono text-slate-300 break-all bg-slate-900/60 p-2.5 rounded-lg border border-slate-800/80">
-                {selectedDossier.fileHashSha256}
-              </div>
-              {selectedDossier.originalSha256 && selectedDossier.originalSha256 !== selectedDossier.fileHashSha256 && (
-                <div className="mt-2 text-xs font-mono text-slate-400">
-                  SHA-256 do Arquivo Original Preservado: <span className="text-slate-300 break-all">{selectedDossier.originalSha256}</span>
+            <div className="mt-4 p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
+              <div>
+                <div className="flex items-center gap-2 text-xs font-bold text-sky-400 uppercase tracking-wider">
+                  <Hash className="w-4 h-4" />
+                  <span>SHA-256 do Vídeo ProvaPack (com Carimbo Pericial nos Frames)</span>
                 </div>
-              )}
-              <p className="text-[11px] text-slate-400 mt-2">
-                O arquivo de vídeo possui exatamente esta chave hash criptográfica calculada bit-a-bit, garantindo que não houve cortes, supressões ou edições na mídia probatória.
+                <div className="mt-1 text-xs font-mono text-slate-200 break-all bg-slate-900/60 p-2.5 rounded-lg border border-slate-800/80">
+                  {selectedDossier.processedSha256 || selectedDossier.fileHashSha256}
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center gap-2 text-xs font-bold text-slate-400 uppercase tracking-wider">
+                  <Hash className="w-4 h-4" />
+                  <span>SHA-256 do Vídeo Original (Arquivo Bruto Preservado)</span>
+                </div>
+                <div className="mt-1 text-xs font-mono text-slate-300 break-all bg-slate-900/60 p-2.5 rounded-lg border border-slate-800/80">
+                  {selectedDossier.originalSha256 || selectedDossier.fileHashSha256}
+                </div>
+              </div>
+
+              <p className="text-[11px] text-slate-400 pt-1">
+                A integridade matemática é validada pelo hash SHA-256 calculado diretamente sobre os bytes dos arquivos gravados.
               </p>
             </div>
 
@@ -294,9 +302,10 @@ export const PublicDossierView: React.FC<PublicDossierViewProps> = ({
               </div>
             </div>
 
-            {/* Legal Notice */}
-            <div className="mt-8 p-4 rounded-2xl bg-slate-950/80 border border-slate-800 text-xs text-slate-400 leading-relaxed">
-              <strong className="text-slate-300">Nota aos Mediadores e Plataformas de E-commerce:</strong> Este registro atesta o empacotamento contínuo realizado pelo vendedor no horário indicado, com os marcos visuais documentados. A integridade matemática é garantida pelo hash SHA-256 do arquivo original ininterrupto com marca d'água pericial incorporada nos frames.
+            {/* Mandatory Disclaimer */}
+            <div className="mt-8 p-4 rounded-2xl bg-slate-950/80 border border-slate-800 text-xs text-slate-300 leading-relaxed">
+              <strong className="text-white block mb-1">Aviso de Responsabilidade:</strong>
+              Este documento comprova o estado do produto e embalagem no momento da gravação. O ProvaPack não se responsabiliza pelo transporte ou entrega.
             </div>
 
             {/* Photo Lightbox */}

@@ -3,29 +3,33 @@
  */
 
 export async function calculateBufferSha256(buffer: ArrayBuffer): Promise<string> {
-  if (window.crypto && window.crypto.subtle) {
+  if (typeof window !== 'undefined' && window.crypto && window.crypto.subtle) {
     const hashBuffer = await window.crypto.subtle.digest('SHA-256', buffer);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
   }
-  // Simple fallback pseudo-hash if SubtleCrypto unavailable
-  let hash = 0;
-  const bytes = new Uint8Array(buffer);
-  for (let i = 0; i < bytes.length; i++) {
-    hash = ((hash << 5) - hash + bytes[i]) | 0;
-  }
-  return 'fallback-' + Math.abs(hash).toString(16).padStart(16, '0');
+  // SubtleCrypto must be present in modern secure browser contexts
+  throw new Error('Não foi possível calcular a integridade criptográfica do arquivo.');
 }
 
 export async function calculateBlobSha256(blob: Blob): Promise<string> {
+  if (!blob || blob.size === 0) {
+    throw new Error('Não foi possível calcular a integridade criptográfica do arquivo.');
+  }
   const arrayBuffer = await blob.arrayBuffer();
   return calculateBufferSha256(arrayBuffer);
 }
 
-export function generateDossierId(): string {
-  const year = new Date().getFullYear();
-  const randomNum = Math.floor(1000 + Math.random() * 9000);
-  return `PRV-${year}-${randomNum}`;
+export function generateDossierId(date: Date = new Date()): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  const hexChars = '0123456789ABCDEF';
+  let rand = '';
+  for (let i = 0; i < 6; i++) {
+    rand += hexChars[Math.floor(Math.random() * hexChars.length)];
+  }
+  return `PP-${y}${m}${d}-${rand}`;
 }
 
 export function formatSecondsToTime(seconds: number): string {

@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -26,68 +27,20 @@ function getAI(): GoogleGenAI | null {
   return aiClient;
 }
 
-// In-memory or shared dossiers storage for verified public lookup
-const registeredDossiers = new Map<string, any>();
-
-// Seed a couple of realistic demo dossiers for instant inspection / verification
-const seedDossiers = [
-  {
-    id: "PRV-2026-8841",
-    marketplace: "Mercado Livre",
-    orderNumber: "MLB-489201948",
-    trackingCode: "BR948294820SL",
-    productName: "Smartphone Galaxy S23 256GB Preto",
-    serialNumber: "RF8W91X4082M",
-    accessories: "Carregador 25W original, Cabo USB-C, Chavinha gaveta SIM, Manual",
-    packageType: "Caixa reforçada com plástico bolha 3 camadas e fita lacre inviolável",
-    recordedAt: "2026-09-20T14:32:10-03:00",
-    durationSeconds: 78,
-    fileHashSha256: "9f83a45c2e176b9a84d319e07f66a12b4892cfa76e902b1f8c4e78a94b3210aa",
-    fileSizeBytes: 24890120,
-    checkpoints: [
-      { stepId: "product", label: "Produto em Perfeito Estado", timestamp: "00:11" },
-      { stepId: "functional", label: "Funcionando (Tela Ligada e Touch Testado)", timestamp: "00:26" },
-      { stepId: "serial", label: "Número de Série / IMEI na Caixa e Aparelho", timestamp: "00:41" },
-      { stepId: "accessories", label: "Acessórios e Cabos Conferidos", timestamp: "00:52" },
-      { stepId: "packaging", label: "Item Inserido na Embalagem Protegida", timestamp: "01:03" },
-      { stepId: "sealed", label: "Pacote Fechado e Fita de Segurança", timestamp: "01:12" },
-      { stepId: "label", label: "Etiqueta Mercado Envios Visível", timestamp: "01:17" }
-    ],
-    status: "validado",
-    verificationStatus: "Intacto e Verificado",
-    sellerName: "TechVendas Oficial (SP)",
-    notes: "Aparelho novo lacrado aberto apenas para demonstração de tela e IMEI conforme política do cliente."
-  },
-  {
-    id: "PRV-2026-4190",
-    marketplace: "Amazon Brasil",
-    orderNumber: "702-8492018-9182301",
-    trackingCode: "LOG8829104AZ",
-    productName: "Headphone Bluetooth Sony WH-1000XM5",
-    serialNumber: "SN-948271048",
-    accessories: "Estojo rígido original, cabo auxiliar P2, cabo USB-C",
-    packageType: "Caixa padrão correios P com proteção de almofadas de ar",
-    recordedAt: "2026-09-21T09:15:44-03:00",
-    durationSeconds: 64,
-    fileHashSha256: "3d7b889e4c19fa76a218c50e2b9f3418e7c10b89a6230f81d4e78c903a5b61e2",
-    fileSizeBytes: 18450912,
-    checkpoints: [
-      { stepId: "product", label: "Produto em Perfeito Estado", timestamp: "00:09" },
-      { stepId: "functional", label: "Funcionamento (LED e Pareamento)", timestamp: "00:21" },
-      { stepId: "serial", label: "Número de Série Gravado no Arco", timestamp: "00:35" },
-      { stepId: "accessories", label: "Estojo e Cabos", timestamp: "00:45" },
-      { stepId: "packaging", label: "Acomodação na Caixa", timestamp: "00:54" },
-      { stepId: "sealed", label: "Fechamento com Fita Personalizada", timestamp: "01:00" },
-      { stepId: "label", label: "Etiqueta Amazon Logística", timestamp: "01:04" }
-    ],
-    status: "validado",
-    verificationStatus: "Intacto e Verificado",
-    sellerName: "AudioPremium Store",
-    notes: "Equipamento testado em bancada antes do envio."
+// Lazy Supabase Client
+let supabaseClient: SupabaseClient | null = null;
+function getSupabase(): SupabaseClient | null {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+  if (!url || !key) return null;
+  if (!supabaseClient) {
+    supabaseClient = createClient(url, key);
   }
-];
+  return supabaseClient;
+}
 
-seedDossiers.forEach(d => registeredDossiers.set(d.id, d));
+// In-memory runtime cache for registered dossiers
+const registeredDossiers = new Map<string, any>();
 
 // API Routes
 app.get('/api/health', (req: Request, res: Response) => {
@@ -125,26 +78,180 @@ app.get('/api/time', (req: Request, res: Response) => {
   });
 });
 
-// Register or update dossier
-app.post('/api/dossiers', (req: Request, res: Response) => {
-  const dossier = req.body;
-  if (!dossier || !dossier.id) {
-    return res.status(400).json({ error: 'ID do dossiê é obrigatório' });
+// Register or update dossier (Persists to Supabase with in-memory cache)
+app.post('/api/dossiers', async (req: Request, res: Response) => {
+  try {
+    const dossier = req.body;
+    if (!dossier || (!dossier.id && !dossier.public_id && !dossier.recordingId)) {
+      return res.status(400).json({ success: false, error: 'Identificador do dossiê é obrigatório' });
+    }
+
+    const publicId = String(dossier.public_id || dossier.id || '').trim();
+    const recordingId = String(dossier.recording_id || dossier.recordingId || publicId).trim();
+    const originalSha256 = String(dossier.original_sha256 || dossier.originalSha256 || dossier.fileHashSha256 || '').trim();
+    const processedSha256 = String(dossier.processed_sha256 || dossier.processedSha256 || originalSha256).trim();
+
+    if (!originalSha256 || originalSha256.length !== 64 || /[^0-9a-fA-F]/.test(originalSha256)) {
+      return res.status(400).json({ success: false, error: 'Hash SHA-256 original inválido.' });
+    }
+
+    if (!processedSha256 || processedSha256.length !== 64 || /[^0-9a-fA-F]/.test(processedSha256)) {
+      return res.status(400).json({ success: false, error: 'Hash SHA-256 processado inválido.' });
+    }
+
+    // Normalized record for Supabase (NO sensitive customer personal data like buyer CPF, card, address)
+    const payload = {
+      public_id: publicId,
+      recording_id: recordingId,
+      marketplace: dossier.marketplace || 'Outros',
+      order_number: String(dossier.order_number || dossier.orderNumber || '').trim(),
+      tracking_code: dossier.tracking_code || dossier.trackingCode || null,
+      product_name: String(dossier.product_name || dossier.productName || '').trim(),
+      serial_number: dossier.serial_number || dossier.serialNumber || null,
+      recorded_at: dossier.recorded_at || dossier.recordedAt || new Date().toISOString(),
+      started_at_utc: dossier.started_at_utc || dossier.startedAtUtc || null,
+      ended_at_utc: dossier.ended_at_utc || dossier.endedAtUtc || null,
+      timezone: dossier.timezone || 'America/Sao_Paulo',
+      time_source: dossier.time_source || dossier.timeSource || 'DEVICE_WITH_SERVER_REFERENCE',
+      duration_seconds: Number(dossier.duration_seconds || dossier.durationSeconds || 0),
+      original_sha256: originalSha256,
+      processed_sha256: processedSha256,
+      file_size_bytes: Number(dossier.file_size_bytes || dossier.fileSizeBytes || 0),
+      status: dossier.status || 'validado'
+    };
+
+    // Store in memory cache
+    registeredDossiers.set(publicId, { ...dossier, ...payload });
+    if (recordingId && recordingId !== publicId) {
+      registeredDossiers.set(recordingId, { ...dossier, ...payload });
+    }
+
+    // Persist to Supabase if configured
+    const supabase = getSupabase();
+    if (supabase) {
+      const { error: dbError } = await supabase
+        .from('provapacks')
+        .upsert(payload, { onConflict: 'public_id' });
+
+      if (dbError) {
+        console.error('[Supabase Error] Falha ao registrar provapack:', dbError);
+        return res.status(500).json({
+          success: false,
+          error: 'Falha ao registrar no Supabase: ' + dbError.message,
+          dossierId: publicId
+        });
+      }
+    }
+
+    return res.json({ 
+      success: true, 
+      dossierId: publicId,
+      persistedToSupabase: !!supabase
+    });
+  } catch (err: any) {
+    console.error('Erro ao salvar dossiê:', err);
+    return res.status(500).json({ success: false, error: err?.message || 'Erro interno ao salvar dossiê.' });
   }
-  registeredDossiers.set(dossier.id, {
-    ...dossier,
-    registeredAtServer: new Date().toISOString()
-  });
-  return res.json({ success: true, dossierId: dossier.id });
 });
 
 // Get dossier by ID for public verification
-app.get('/api/dossiers/:id', (req: Request, res: Response) => {
-  const dossier = registeredDossiers.get(req.params.id);
-  if (!dossier) {
-    return res.status(404).json({ error: 'Dossiê não encontrado na base central.' });
+app.get('/api/dossiers/:id', async (req: Request, res: Response) => {
+  try {
+    const rawId = req.params.id ? req.params.id.trim() : '';
+    if (!rawId) {
+      return res.status(404).json({ success: false, error: 'Registro não encontrado' });
+    }
+
+    const supabase = getSupabase();
+    if (supabase) {
+      const { data, error } = await supabase
+        .from('provapacks')
+        .select('*')
+        .or(`public_id.eq.${rawId},recording_id.eq.${rawId}`)
+        .maybeSingle();
+
+      if (data && !error) {
+        return res.json({
+          success: true,
+          dossier: {
+            id: data.public_id,
+            public_id: data.public_id,
+            recordingId: data.recording_id,
+            recording_id: data.recording_id,
+            marketplace: data.marketplace,
+            orderNumber: data.order_number,
+            order_number: data.order_number,
+            trackingCode: data.tracking_code,
+            tracking_code: data.tracking_code,
+            productName: data.product_name,
+            product_name: data.product_name,
+            serialNumber: data.serial_number,
+            serial_number: data.serial_number,
+            recordedAt: data.recorded_at,
+            recorded_at: data.recorded_at,
+            durationSeconds: data.duration_seconds,
+            duration_seconds: data.duration_seconds,
+            originalSha256: data.original_sha256,
+            original_sha256: data.original_sha256,
+            processedSha256: data.processed_sha256,
+            processed_sha256: data.processed_sha256,
+            fileHashSha256: data.processed_sha256,
+            fileSizeBytes: data.file_size_bytes,
+            file_size_bytes: data.file_size_bytes,
+            timezone: data.timezone,
+            timeSource: data.time_source,
+            status: data.status,
+            verificationStatus: 'Registro encontrado',
+            created_at: data.created_at
+          }
+        });
+      }
+    }
+
+    // Check runtime memory cache
+    const cached = registeredDossiers.get(rawId);
+    if (cached) {
+      return res.json({
+        success: true,
+        dossier: {
+          id: cached.public_id || cached.id,
+          public_id: cached.public_id || cached.id,
+          recordingId: cached.recording_id || cached.recordingId,
+          recording_id: cached.recording_id || cached.recordingId,
+          marketplace: cached.marketplace,
+          orderNumber: cached.order_number || cached.orderNumber,
+          order_number: cached.order_number || cached.orderNumber,
+          trackingCode: cached.tracking_code || cached.trackingCode,
+          tracking_code: cached.tracking_code || cached.trackingCode,
+          productName: cached.product_name || cached.productName,
+          product_name: cached.product_name || cached.productName,
+          serialNumber: cached.serial_number || cached.serialNumber,
+          serial_number: cached.serial_number || cached.serialNumber,
+          recordedAt: cached.recorded_at || cached.recordedAt,
+          recorded_at: cached.recorded_at || cached.recordedAt,
+          durationSeconds: cached.duration_seconds || cached.durationSeconds,
+          duration_seconds: cached.duration_seconds || cached.durationSeconds,
+          originalSha256: cached.original_sha256 || cached.originalSha256,
+          original_sha256: cached.original_sha256 || cached.originalSha256,
+          processedSha256: cached.processed_sha256 || cached.processedSha256,
+          processed_sha256: cached.processed_sha256 || cached.processedSha256,
+          fileHashSha256: cached.processed_sha256 || cached.fileHashSha256,
+          fileSizeBytes: cached.file_size_bytes || cached.fileSizeBytes,
+          file_size_bytes: cached.file_size_bytes || cached.fileSizeBytes,
+          timezone: cached.timezone,
+          timeSource: cached.time_source || cached.timeSource,
+          status: cached.status || 'validado',
+          verificationStatus: 'Registro encontrado',
+          created_at: cached.created_at || new Date().toISOString()
+        }
+      });
+    }
+
+    return res.status(404).json({ success: false, error: 'Registro não encontrado' });
+  } catch (err: any) {
+    console.error('Erro na consulta do dossiê:', err);
+    return res.status(500).json({ success: false, error: 'Erro ao consultar registro.' });
   }
-  return res.json({ success: true, dossier });
 });
 
 // AI candidate models with fallback sequence (prioritizing responsive flash-lite)
@@ -247,23 +354,12 @@ app.post('/api/ai/ocr-label', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Imagem em base64 não fornecida.' });
     }
 
-    // Default heuristic extraction values for fallback
-    const fallbackData = {
-      orderNumber: 'PED-' + Math.floor(100000 + Math.random() * 900000),
-      serialNumber: 'SN-' + Math.floor(1000000 + Math.random() * 9000000),
-      carrier: 'Mercado Envios',
-      trackingCode: 'BR' + Math.floor(10000000 + Math.random() * 90000000) + 'ML',
-      marketplace: 'Mercado Livre',
-      confidenceScore: 0.90
-    };
-
     const ai = getAI();
     if (!ai) {
       return res.json({
-        success: true,
-        fallback: true,
-        message: 'Modo local assistido: dados sugeridos para conferência rápida.',
-        data: fallbackData
+        success: false,
+        requiresManualInput: true,
+        message: 'Não foi possível identificar automaticamente os dados da etiqueta. Preencha ou confirme manualmente.'
       });
     }
 
@@ -279,6 +375,7 @@ Identifique com precisão:
 5. Nome do produto ou descrição breve se identificável (productName)
 6. Destinatário/Cidade se visível
 
+Se um campo NÃO estiver visível ou não puder ser lido com certeza, retorne null para esse campo. NUNCA invente dados.
 Retorne EXCLUSIVAMENTE um objeto JSON válido (sem tags markdown de código e sem texto adicional), no seguinte formato:
 {
   "orderNumber": "string ou null",
@@ -311,42 +408,34 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido (sem tags markdown de código e se
 
     if (aiResult && aiResult.text) {
       const responseText = aiResult.text;
-      let parsedData: any = {};
+      let parsedData: any = null;
       try {
         const cleaned = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
         parsedData = JSON.parse(cleaned);
       } catch {
-        parsedData = { rawText: responseText };
+        parsedData = null;
       }
 
-      return res.json({ 
-        success: true, 
-        data: parsedData,
-        modelUsed: aiResult.modelUsed
-      });
+      if (parsedData && typeof parsedData === 'object') {
+        return res.json({ 
+          success: true, 
+          data: parsedData,
+          modelUsed: aiResult.modelUsed
+        });
+      }
     }
 
-    // If Gemini model is under temporary high demand (503), return smooth fallback without error
     return res.json({
-      success: true,
-      fallback: true,
-      message: 'IA em alta demanda momentânea. Dados sugeridos para conferência rápida.',
-      data: fallbackData
+      success: false,
+      requiresManualInput: true,
+      message: 'Não foi possível identificar automaticamente os dados da etiqueta. Preencha ou confirme manualmente.'
     });
   } catch (error: any) {
-    console.warn('[ProvaPack OCR] Resposta de contingência ativada:', error?.message);
+    console.warn('[ProvaPack OCR] Não foi possível ler etiqueta:', error?.message);
     return res.json({
-      success: true,
-      fallback: true,
-      message: 'Dados assistidos para preenchimento rápido.',
-      data: {
-        orderNumber: 'PED-' + Math.floor(100000 + Math.random() * 900000),
-        serialNumber: 'SN-' + Math.floor(1000000 + Math.random() * 9000000),
-        carrier: 'Mercado Envios',
-        trackingCode: 'BR' + Math.floor(10000000 + Math.random() * 90000000) + 'ML',
-        marketplace: 'Mercado Livre',
-        confidenceScore: 0.85
-      }
+      success: false,
+      requiresManualInput: true,
+      message: 'Não foi possível identificar automaticamente os dados da etiqueta. Preencha ou confirme manualmente.'
     });
   }
 });

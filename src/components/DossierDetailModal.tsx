@@ -6,6 +6,7 @@ import {
 import { Dossier, CheckpointFrame } from '../types';
 import { generateDossierPDF } from '../utils/pdfGenerator';
 import { formatBytes } from '../utils/crypto';
+import { getVideoBlobs } from '../utils/watermark';
 
 interface DossierDetailModalProps {
   isOpen: boolean;
@@ -269,21 +270,43 @@ export const DossierDetailModal: React.FC<DossierDetailModalProps> = ({
               )}
             </div>
 
-            <div className="mt-2 flex items-center justify-between flex-wrap gap-2 text-xs">
+            <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs">
               <span className="text-[11px] text-emerald-400 font-medium flex items-center gap-1">
                 <Check className="w-3.5 h-3.5" />
                 Marca d'água pericial incorporada aos frames
               </span>
-              {dossier.videoBlobUrl && (
-                <a
-                  href={dossier.videoBlobUrl}
-                  download={`Provapack-${dossier.recordingId || dossier.orderNumber || dossier.id}.webm`}
-                  className="text-sky-400 hover:text-sky-300 flex items-center gap-1 font-semibold"
-                >
-                  <Download className="w-3 h-3" />
-                  <span>Baixar Vídeo (.webm)</span>
-                </a>
-              )}
+              {(() => {
+                const storedBlobs = getVideoBlobs(dossier.id);
+                const fileExt = dossier.videoMimeType?.includes('mp4') ? 'mp4' : 'webm';
+                const orderSlug = (dossier.orderNumber || dossier.id).replace(/[^a-zA-Z0-9_-]/g, '_');
+                const processedUrl = dossier.processedVideoBlobUrl || (storedBlobs?.processed ? URL.createObjectURL(storedBlobs.processed) : dossier.videoBlobUrl);
+                const originalUrl = dossier.originalVideoBlobUrl || (storedBlobs?.original ? URL.createObjectURL(storedBlobs.original) : null);
+
+                return (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {processedUrl && (
+                      <a
+                        href={processedUrl}
+                        download={`provapack-${orderSlug}-provapack.${fileExt}`}
+                        className="text-sky-400 hover:text-sky-300 flex items-center gap-1 font-semibold text-[11px] bg-slate-900 px-2 py-1 rounded-lg border border-slate-700/80 transition-colors"
+                      >
+                        <Download className="w-3 h-3" />
+                        <span>Vídeo ProvaPack</span>
+                      </a>
+                    )}
+                    {originalUrl && (
+                      <a
+                        href={originalUrl}
+                        download={`provapack-${orderSlug}-original.${fileExt}`}
+                        className="text-slate-300 hover:text-white flex items-center gap-1 font-medium text-[11px] bg-slate-900 px-2 py-1 rounded-lg border border-slate-700/80 transition-colors"
+                      >
+                        <Download className="w-3 h-3" />
+                        <span>Vídeo Original</span>
+                      </a>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           </div>
 

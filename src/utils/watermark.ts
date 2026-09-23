@@ -17,6 +17,7 @@ export interface WatermarkData {
 export interface VideoProcessingOptions {
   startedAtTimestamp: number;
   recordingId: string;
+  durationSeconds?: number;
   timezoneOffsetFormatted?: string;
   onProgress?: (progressPercent: number, statusText: string) => void;
 }
@@ -178,9 +179,15 @@ export async function processVideoWatermark(
 ): Promise<Blob> {
   return new Promise((resolve, reject) => {
     try {
+      if (!originalBlob || originalBlob.size === 0) {
+        reject(new Error('Vídeo original vazio ou inválido para processamento.'));
+        return;
+      }
+
       const {
         startedAtTimestamp,
         recordingId,
+        durationSeconds = 10,
         timezoneOffsetFormatted = getTimezoneOffsetString(new Date(startedAtTimestamp)),
         onProgress
       } = options;
@@ -193,6 +200,17 @@ export async function processVideoWatermark(
       video.muted = true;
       video.playsInline = true;
       video.autoplay = false;
+      video.crossOrigin = 'anonymous';
+
+      // Attach video element to DOM so browser video decoding pipeline operates smoothly
+      video.style.position = 'fixed';
+      video.style.top = '-9999px';
+      video.style.left = '-9999px';
+      video.style.width = '320px';
+      video.style.height = '180px';
+      video.style.opacity = '0.001';
+      video.style.pointerEvents = 'none';
+      document.body.appendChild(video);
 
       let isFinished = false;
       let mediaRecorder: MediaRecorder | null = null;
@@ -206,6 +224,9 @@ export async function processVideoWatermark(
         URL.revokeObjectURL(originalUrl);
         video.pause();
         video.src = '';
+        if (video.parentNode) {
+          video.parentNode.removeChild(video);
+        }
       };
 
       video.onerror = () => {
@@ -217,7 +238,9 @@ export async function processVideoWatermark(
         try {
           const width = video.videoWidth || 1280;
           const height = video.videoHeight || 720;
-          const duration = video.duration || 10;
+          // Chromium can report Infinity or NaN for WebM recorded in-browser
+          const hasValidDuration = isFinite(video.duration) && !isNaN(video.duration) && video.duration > 0;
+          const effectiveDuration = hasValidDuration ? video.duration : Math.max(5, durationSeconds);
 
           const canvas = document.createElement('canvas');
           canvas.width = width;
@@ -258,13 +281,17 @@ export async function processVideoWatermark(
 
           mediaRecorder.onstop = () => {
             cleanup();
+            if (chunks.length === 0) {
+              reject(new Error('Não foi possível codificar os frames do vídeo processado.'));
+              return;
+            }
             const processedBlob = new Blob(chunks, { type: mimeType });
             resolve(processedBlob);
           };
 
           mediaRecorder.start(200); // 200ms slice chunks
 
-          onProgress?.(15, 'Processando frames e incorporando marca pericial...');
+          onProgress?.(15, 'Processando frames e incorporando marca técnica...');
 
           // Render loop
           const renderFrame = () => {
@@ -277,7 +304,7 @@ export async function processVideoWatermark(
             const currentVideoOffsetMs = Math.round(video.currentTime * 1000);
             const currentFrameDate = new Date(startedAtTimestamp + currentVideoOffsetMs);
 
-            // Burn cryptographic watermark onto the frame
+            // Burn technical watermark onto the frame
             drawWatermarkBadge(ctx, width, height, {
               dateTimeFormatted: formatWatermarkDateTime(currentFrameDate),
               timezoneFormatted: timezoneOffsetFormatted,
@@ -285,12 +312,14 @@ export async function processVideoWatermark(
             });
 
             // Progress reporting
-            if (duration > 0) {
-              const pct = Math.min(95, Math.round(15 + (video.currentTime / duration) * 75));
+            if (effectiveDuration > 0) {
+              const pct = Math.min(95, Math.round(15 + (video.currentTime / effectiveDuration) * 75));
               onProgress?.(pct, `Incorporando carimbo temporal: ${formatWatermarkDateTime(currentFrameDate)}...`);
             }
 
-            if (!video.ended && !video.paused && !isFinished) {
+            if (video.ended || video.currentTime >= effectiveDuration - 0.08) {
+              finishProcessing();
+            } else if (!video.paused && !isFinished) {
               animationFrameId = requestAnimationFrame(renderFrame);
             }
           };
@@ -298,7 +327,7 @@ export async function processVideoWatermark(
           const finishProcessing = () => {
             if (isFinished) return;
             isFinished = true;
-            onProgress?.(96, 'Finalizando compressão e codificação do vídeo derivado...');
+            onProgress?.(96, 'Finalizando compressão e codificação do vídeo ProvaPack...');
             setTimeout(() => {
               if (mediaRecorder && mediaRecorder.state !== 'inactive') {
                 mediaRecorder.stop();
@@ -309,16 +338,15 @@ export async function processVideoWatermark(
           video.onended = finishProcessing;
 
           // Fallback safety timeout if video doesn't emit onended
-          const maxProcessingTimeMs = Math.max(30000, duration * 2500);
+          const maxProcessingTimeMs = Math.max(25000, effectiveDuration * 2000);
           intervalTimer = setTimeout(() => {
             if (!isFinished) {
-              console.warn('[Watermark Engine] Timeout de segurança atingido. Concluindo gravação.');
+              console.warn('[Watermark Engine] Limite de tempo de segurança atingido. Concluindo processamento.');
               finishProcessing();
             }
           }, maxProcessingTimeMs);
 
           // Start playback
-          // 1.0x or 1.5x playback speed for responsive processing without skipping frames
           video.playbackRate = 1.0;
           await video.play();
           renderFrame();

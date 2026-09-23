@@ -48,8 +48,8 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
   onCancel,
   onDossierCreated
 }) => {
-  // Wizard state: 'setup' | 'recording' | 'processing'
-  const [phase, setPhase] = useState<'setup' | 'recording' | 'processing'>('setup');
+  // Wizard state: 'setup' | 'recording' | 'processing' | 'error'
+  const [phase, setPhase] = useState<'setup' | 'recording' | 'processing' | 'error'>('setup');
 
   // Order Details
   const [marketplace, setMarketplace] = useState<Marketplace>('Mercado Livre');
@@ -71,7 +71,6 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [capturedCheckpoints, setCapturedCheckpoints] = useState<CheckpointFrame[]>([]);
   const [cameraError, setCameraError] = useState<string | null>(null);
-  const [isSimulatedCamera, setIsSimulatedCamera] = useState(false);
   const [processingStatus, setProcessingStatus] = useState('Processando gravação ininterrupta...');
 
   // Forensic Watermark and Temporal Metadata
@@ -102,8 +101,6 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
   const recordedChunksRef = useRef<Blob[]>([]);
   const timerIntervalRef = useRef<any>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const simCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const simAnimRef = useRef<number | null>(null);
 
   // Automatically attach media stream whenever video DOM node mounts or changes
   const assignVideoRef = (node: HTMLVideoElement | null) => {
@@ -141,6 +138,7 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
     try {
       if (mediaStreamRef.current) {
         mediaStreamRef.current.getTracks().forEach(t => t.stop());
+        mediaStreamRef.current = null;
       }
 
       if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
@@ -182,129 +180,23 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
           videoPreviewRef.current.srcObject = stream;
           videoPreviewRef.current.play().catch(() => {});
         }
-        setIsSimulatedCamera(false);
         setCameraError(null);
       } else {
         throw new Error('Navegador sem suporte direto a getUserMedia.');
       }
     } catch (err: any) {
       console.warn('Câmera física indisponível:', err);
-      setCameraError('Câmera física indisponível ou permissão bloqueada no navegador. O simulador de bancada em alta definição foi ativado para testes.');
-      setIsSimulatedCamera(true);
-      initSimulatedStream();
-    }
-  };
-
-  // High-fidelity active simulated video stream generator
-  const initSimulatedStream = () => {
-    if (simAnimRef.current) {
-      cancelAnimationFrame(simAnimRef.current);
-    }
-    if (!simCanvasRef.current) {
-      simCanvasRef.current = document.createElement('canvas');
-      simCanvasRef.current.width = 1280;
-      simCanvasRef.current.height = 720;
-    }
-    const canvas = simCanvasRef.current;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    let frameCount = 0;
-    const render = () => {
-      frameCount++;
-      const now = new Date();
-
-      // Deep studio background
-      const grad = ctx.createLinearGradient(0, 0, 1280, 720);
-      grad.addColorStop(0, '#090d16');
-      grad.addColorStop(1, '#1e293b');
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, 1280, 720);
-
-      // Engineering workbench grid
-      ctx.strokeStyle = 'rgba(51, 65, 85, 0.35)';
-      ctx.lineWidth = 1;
-      for (let x = 0; x < 1280; x += 40) {
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, 720);
-        ctx.stroke();
+      setCameraError('Não foi possível acessar a câmera.');
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach(t => t.stop());
+        mediaStreamRef.current = null;
       }
-      for (let y = 0; y < 720; y += 40) {
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(1280, y);
-        ctx.stroke();
-      }
-
-      // Continuous laser scanner animation (active frame dynamics)
-      const beamY = (frameCount * 3.5) % 720;
-      const beamGrad = ctx.createLinearGradient(0, beamY - 30, 0, beamY + 30);
-      beamGrad.addColorStop(0, 'rgba(56, 189, 248, 0)');
-      beamGrad.addColorStop(0.5, 'rgba(56, 189, 248, 0.22)');
-      beamGrad.addColorStop(1, 'rgba(56, 189, 248, 0)');
-      ctx.fillStyle = beamGrad;
-      ctx.fillRect(0, beamY - 30, 1280, 60);
-
-      // Central inspection station plate
-      ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
-      ctx.strokeStyle = '#38bdf8';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      if (ctx.roundRect) {
-        ctx.roundRect(320, 160, 640, 400, 20);
-      } else {
-        ctx.rect(320, 160, 640, 400);
-      }
-      ctx.fill();
-      ctx.stroke();
-
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 24px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText('BANCADA DE AUDITORIA PROVAPACK', 640, 220);
-
-      ctx.fillStyle = '#38bdf8';
-      ctx.font = 'bold 20px sans-serif';
-      ctx.fillText(productName || 'Item em Conferência e Embalagem', 640, 270);
-
-      ctx.fillStyle = '#94a3b8';
-      ctx.font = '15px monospace';
-      ctx.fillText(`Pedido: ${orderNumber || 'PEDIDO'} • ${marketplace}`, 640, 320);
-
-      ctx.fillStyle = '#f8fafc';
-      ctx.font = 'bold 36px monospace';
-      ctx.fillText(now.toLocaleTimeString('pt-BR'), 640, 400);
-
-      ctx.fillStyle = '#34d399';
-      ctx.font = 'bold 14px monospace';
-      ctx.fillText('● CAPTURA DE VÍDEO ATIVA EM TEMPO REAL', 640, 460);
-
-      simAnimRef.current = requestAnimationFrame(render);
-    };
-
-    render();
-
-    try {
-      const stream = canvas.captureStream ? canvas.captureStream(25) : (canvas as any).mozCaptureStream?.(25);
-      if (stream) {
-        mediaStreamRef.current = stream;
-        if (videoPreviewRef.current) {
-          videoPreviewRef.current.srcObject = stream;
-          videoPreviewRef.current.play().catch(() => {});
-        }
-      }
-    } catch (e) {
-      console.warn('Falha ao capturar stream do simulador:', e);
     }
   };
 
   useEffect(() => {
     startCamera();
     return () => {
-      if (simAnimRef.current) {
-        cancelAnimationFrame(simAnimRef.current);
-      }
       if (mediaStreamRef.current) {
         mediaStreamRef.current.getTracks().forEach(t => t.stop());
       }
@@ -325,7 +217,7 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
     const step = RECORDING_STEPS[effectiveStepIdx] || RECORDING_STEPS[0];
 
     // Check if real camera video is streaming and has active frames
-    const hasLiveVideo = video && (video.videoWidth > 0 || video.readyState >= 2) && !isSimulatedCamera;
+    const hasLiveVideo = video && (video.videoWidth > 0 || video.readyState >= 2);
 
     if (hasLiveVideo && video) {
       const width = video.videoWidth || 1280;
@@ -353,69 +245,7 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
       return canvas.toDataURL('image/jpeg', 0.90);
     }
 
-    // High-definition simulated bancada recording frame
-    canvas.width = 640;
-    canvas.height = 480;
-
-    const grad = ctx.createLinearGradient(0, 0, 640, 480);
-    grad.addColorStop(0, '#090d16');
-    grad.addColorStop(1, '#1e293b');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 640, 480);
-
-    // Bancada pattern
-    ctx.strokeStyle = '#1e293b';
-    ctx.lineWidth = 1;
-    for (let x = 0; x < 640; x += 32) {
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, 480);
-      ctx.stroke();
-    }
-    for (let y = 0; y < 480; y += 32) {
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(640, y);
-      ctx.stroke();
-    }
-
-    // Step Badge
-    const colors = ['#0284c7', '#2563eb', '#7c3aed', '#059669', '#d97706', '#dc2626', '#0891b2'];
-    const stepColor = colors[effectiveStepIdx % colors.length];
-
-    ctx.fillStyle = stepColor;
-    ctx.fillRect(100, 110, 440, 220);
-
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(110, 120, 420, 200);
-
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 20px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(`Passo ${step.number}: ${step.title}`, 320, 175);
-
-    ctx.fillStyle = '#bae6fd';
-    ctx.font = '14px sans-serif';
-    ctx.fillText(productName || 'Item em Conferência', 320, 215);
-
-    ctx.fillStyle = 'rgba(0,0,0,0.4)';
-    ctx.fillRect(130, 240, 380, 55);
-
-    ctx.fillStyle = '#ffffff';
-    ctx.font = '12px sans-serif';
-    ctx.fillText(step.instruction, 320, 260);
-
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '11px monospace';
-    ctx.fillText(`Pedido: ${orderNumber || 'S/N'} • ${marketplace}`, 320, 280);
-
-    // Watermark
-    ctx.fillStyle = '#f8fafc';
-    ctx.font = '12px monospace';
-    ctx.fillText(`PROVAPACK REC • ${new Date().toLocaleTimeString('pt-BR')} • ${orderNumber || 'PEDIDO'}`, 320, 450);
-
-    return canvas.toDataURL('image/jpeg', 0.90);
+    return '';
   };
 
   // OCR Auto-detect using Gemini API via /api/ai/ocr-label
@@ -458,8 +288,13 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
 
   // Start continuous 7-step recording
   const handleStartRecording = async () => {
-    if (!productName.trim()) {
-      alert('Por favor, informe o nome do produto antes de iniciar a gravação.');
+    if (!productName.trim() || !orderNumber.trim()) {
+      alert('Por favor, informe o nome do produto e o número do pedido antes de iniciar a gravação.');
+      return;
+    }
+
+    if (!mediaStreamRef.current || cameraError) {
+      alert('Não foi possível acessar a câmera.');
       return;
     }
 
@@ -656,99 +491,105 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
       recordedBlob = new Blob(recordedChunksRef.current, { type: mime });
     }
 
-    // High quality visual synthesis fallback if hardware recorder produced 0 bytes (NEVER a black screen)
     if (!recordedBlob || recordedBlob.size === 0) {
-      const dummyCanvas = document.createElement('canvas');
-      dummyCanvas.width = 1280;
-      dummyCanvas.height = 720;
-      const dctx = dummyCanvas.getContext('2d');
-      if (dctx) {
-        // High quality dark blue-slate background
-        const grad = dctx.createLinearGradient(0, 0, 1280, 720);
-        grad.addColorStop(0, '#0f172a');
-        grad.addColorStop(0.5, '#1e293b');
-        grad.addColorStop(1, '#0f172a');
-        dctx.fillStyle = grad;
-        dctx.fillRect(0, 0, 1280, 720);
-
-        // Header
-        dctx.fillStyle = '#0284c7';
-        dctx.fillRect(0, 0, 1280, 52);
-        dctx.fillStyle = '#ffffff';
-        dctx.font = 'bold 22px monospace';
-        dctx.fillText(`PROVAPACK • EVIDÊNCIA CONTÍNUA ${recordingId}`, 24, 35);
-
-        // Info box
-        dctx.fillStyle = '#38bdf8';
-        dctx.font = 'bold 20px monospace';
-        dctx.fillText(`PRODUTO: ${(productName || 'DISPOSITIVO VERIFICADO').toUpperCase()}`, 60, 560);
-        dctx.fillText(`PEDIDO: ${orderNumber || 'PEDIDO CONFERIDO'}`, 60, 600);
-        dctx.fillStyle = '#94a3b8';
-        dctx.font = '16px monospace';
-        dctx.fillText(`DATA/HORA: ${formatBrasiliaDate(new Date().toISOString())} • GMT-03:00`, 60, 640);
-        dctx.fillText(`AUTENTICAÇÃO: 7 PASSOS COBERTOS • REGISTRO INVIOLÁVEL`, 60, 675);
-      }
-      const stream = dummyCanvas.captureStream ? dummyCanvas.captureStream(15) : (dummyCanvas as any).mozCaptureStream?.(15);
-      if (stream) {
-        try {
-          const mime = getSupportedVideoMimeType() || 'video/webm';
-          const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
-          const c: Blob[] = [];
-          rec.ondataavailable = e => { if (e.data && e.data.size > 0) c.push(e.data); };
-          rec.start();
-          await new Promise(r => setTimeout(r, 400));
-          rec.stop();
-          await new Promise(r => setTimeout(r, 200));
-          if (c.length > 0) {
-            recordedBlob = new Blob(c, { type: mime || 'video/webm' });
-          }
-        } catch {}
-      }
-      if (!recordedBlob) {
-        const dummyBuffer = new TextEncoder().encode(`PROVAPACK-RECORDING-${Date.now()}-${recordingId}`);
-        recordedBlob = new Blob([dummyBuffer], { type: 'video/webm' });
-      }
+      setProcessingError('Não foi possível concluir a gravação. Nenhuma evidência foi registrada.');
+      setPhase('error');
+      return;
     }
 
     // Step 1: Preserve original camera recording
     setProcessingStage('ORIGINAL_SAVED');
     setOriginalBlobHolder(recordedBlob);
-    setProcessingPct(40);
-    setProcessingStatus('Arquivo de vídeo original preservado bit-a-bit...');
+    setProcessingPct(30);
+    setProcessingStatus('Arquivo de vídeo original preservado...');
 
-    // Step 2: Calculate cryptographic SHA-256 of the video
+    // Step 2: Calculate cryptographic SHA-256 of the original video
     setProcessingStage('HASHING_ORIGINAL');
-    const videoHash = await calculateBlobSha256(recordedBlob);
-    setOriginalSha256Holder(videoHash);
-    setProcessingPct(75);
-    setProcessingStatus('Hash criptográfico SHA-256 da gravação calculado com sucesso.');
+    let originalHash = '';
+    try {
+      originalHash = await calculateBlobSha256(recordedBlob);
+      setOriginalSha256Holder(originalHash);
+      setProcessingPct(50);
+      setProcessingStatus('Hash SHA-256 do vídeo original calculado.');
+    } catch {
+      setProcessingError('Não foi possível calcular o hash SHA-256 do arquivo original.');
+      setPhase('error');
+      return;
+    }
 
-    // Step 3: Finalize evidence with full integrity
-    setProcessingStage('HASHING_FINAL');
-    setProcessingPct(95);
-    setProcessingStatus('Validando integridade pericial e carimbo de tempo...');
+    // Step 3: Process video watermark burning badge onto video frames
+    setProcessingStage('PROCESSING');
+    setProcessingPct(60);
+    setProcessingStatus('Incorporando carimbo de data/hora nos frames...');
 
-    const processedBlob = recordedBlob;
-    const processedHash = videoHash;
-    setProcessedBlobHolder(processedBlob);
-    setProcessedSha256Holder(processedHash);
+    let processedBlob: Blob | null = null;
+    let processedHash = '';
+
+    try {
+      processedBlob = await processVideoWatermark(recordedBlob, {
+        startedAtTimestamp: startedAtTimestamp || Date.now(),
+        recordingId,
+        durationSeconds: recordingSeconds,
+        timezoneOffsetFormatted,
+        onProgress: (pct, msg) => {
+          setProcessingPct(Math.round(50 + pct * 0.45));
+          setProcessingStatus(msg);
+        }
+      });
+      processedHash = await calculateBlobSha256(processedBlob);
+      setProcessedBlobHolder(processedBlob);
+      setProcessedSha256Holder(processedHash);
+      setProcessingPct(95);
+    } catch (watermarkErr: any) {
+      console.warn('Falha no processamento da marca d\'água:', watermarkErr);
+      setProcessingStage('FAILED');
+      setProcessingError('O vídeo original foi preservado, mas a versão ProvaPack não pôde ser gerada.');
+      return;
+    }
 
     setProcessingStage('READY');
     setProcessingPct(100);
-    setProcessingStatus('Evidência salva com sucesso! Integridade pericial garantida.');
+    setProcessingStatus('Registro técnico ProvaPack gerado com sucesso.');
 
-    finalizeDossier(recordedBlob, videoHash, processedBlob, processedHash, lastStep, lastFrame);
+    finalizeDossier(recordedBlob, originalHash, processedBlob, processedHash, lastStep, lastFrame);
   };
 
   const handleRetryWatermark = async () => {
-    if (!originalBlobHolder) return;
+    if (!originalBlobHolder || !originalSha256Holder) return;
+    setProcessingStage('PROCESSING');
+    setProcessingPct(60);
+    setProcessingStatus('Tentando gerar versão ProvaPack com marca d\'água novamente...');
+    setProcessingError(null);
+
     const lastStep = RECORDING_STEPS[currentStepIdx] || RECORDING_STEPS[RECORDING_STEPS.length - 1];
     const lastFrame = grabCurrentFrame(currentStepIdx);
-    finalizeDossier(originalBlobHolder, originalSha256Holder, originalBlobHolder, originalSha256Holder, lastStep, lastFrame);
+
+    try {
+      const processedBlob = await processVideoWatermark(originalBlobHolder, {
+        startedAtTimestamp: startedAtTimestamp || Date.now(),
+        recordingId,
+        durationSeconds: recordingSeconds,
+        timezoneOffsetFormatted,
+        onProgress: (pct, msg) => {
+          setProcessingPct(Math.round(50 + pct * 0.45));
+          setProcessingStatus(msg);
+        }
+      });
+      const processedHash = await calculateBlobSha256(processedBlob);
+      setProcessedBlobHolder(processedBlob);
+      setProcessedSha256Holder(processedHash);
+      setProcessingPct(100);
+      setProcessingStage('READY');
+      setProcessingStatus('Registro técnico ProvaPack gerado com sucesso.');
+      finalizeDossier(originalBlobHolder, originalSha256Holder, processedBlob, processedHash, lastStep, lastFrame);
+    } catch {
+      setProcessingStage('FAILED');
+      setProcessingError('O vídeo original foi preservado, mas a versão ProvaPack não pôde ser gerada.');
+    }
   };
 
   const handleSaveOriginalOnly = () => {
-    if (!originalBlobHolder) return;
+    if (!originalBlobHolder || !originalSha256Holder) return;
     const lastStep = RECORDING_STEPS[currentStepIdx] || RECORDING_STEPS[RECORDING_STEPS.length - 1];
     const lastFrame = grabCurrentFrame(currentStepIdx);
     finalizeDossier(originalBlobHolder, originalSha256Holder, originalBlobHolder, originalSha256Holder, lastStep, lastFrame);
@@ -813,7 +654,7 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
       timeSource,
       timezone,
       timezoneOffsetFormatted,
-      durationMs: Math.max(15, recordingSeconds) * 1000,
+      durationMs: Math.max(1, recordingSeconds) * 1000,
       originalSha256: originalHash,
       processedSha256: processedHash,
       processingStatus: 'READY',
@@ -826,7 +667,7 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
       id: dossierId,
       recordingId,
       marketplace,
-      orderNumber: orderNumber.trim() || 'PED-' + Math.floor(100000 + Math.random() * 900000),
+      orderNumber: orderNumber.trim(),
       trackingCode: trackingCode.trim() || undefined,
       productName: productName.trim(),
       serialNumber: serialNumber.trim() || undefined,
@@ -835,7 +676,7 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
       sellerName: sellerName.trim() || seller.sellerName,
       recordedAt: nowIso,
       formattedDate: formatBrasiliaDate(nowIso),
-      durationSeconds: Math.max(15, recordingSeconds),
+      durationSeconds: Math.max(1, recordingSeconds),
       fileHashSha256: processedHash, // Primary hash is the watermarked derived video
       originalSha256: originalHash,
       processedSha256: processedHash,
@@ -846,7 +687,7 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
       videoMimeType: processedBlob.type || 'video/webm',
       checkpoints: finalCheckpoints,
       status: 'validado',
-      verificationStatus: 'Registro Validado & Integridade Criptográfica Dupla 100%',
+      verificationStatus: 'Registro técnico ProvaPack',
       notes: notes.trim() || undefined,
       evidenceRecording: evidence,
       timeSource,
@@ -1092,33 +933,47 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
                     autoPlay
                     muted
                     playsInline
-                    className={`w-full h-full object-cover ${isSimulatedCamera ? 'hidden' : 'block'}`}
+                    className="w-full h-full object-cover block"
                   />
 
-                  {isSimulatedCamera && (
-                    <div className="text-center p-4">
-                      <div className="w-12 h-12 rounded-2xl bg-sky-500/20 text-sky-400 flex items-center justify-center mx-auto mb-2">
-                        <Camera className="w-6 h-6" />
+                  {cameraError && (
+                    <div className="absolute inset-0 bg-slate-950/95 flex flex-col items-center justify-center p-4 text-center z-10">
+                      <div className="w-12 h-12 rounded-2xl bg-rose-500/20 text-rose-400 flex items-center justify-center mb-3">
+                        <AlertTriangle className="w-6 h-6" />
                       </div>
-                      <div className="text-xs font-semibold text-slate-200">Simulador de Bancada Ativo</div>
-                      <div className="text-[11px] text-slate-400 mt-1 max-w-xs mx-auto">
-                        Pronto para gravação contínua em 7 passos com geração de frames e hash SHA-256.
+                      <div className="text-sm font-bold text-white mb-1">
+                        Não foi possível acessar a câmera.
+                      </div>
+                      <p className="text-[11px] text-slate-400 max-w-xs mb-4">
+                        Verifique as permissões de acesso ao dispositivo no navegador.
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => startCamera(true)}
+                          className="px-3 py-1.5 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs flex items-center gap-1.5"
+                        >
+                          <RotateCw className="w-3.5 h-3.5" />
+                          <span>Tentar novamente</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={onCancel}
+                          className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold"
+                        >
+                          Cancelar
+                        </button>
                       </div>
                     </div>
                   )}
 
                   {/* Watermark Overlay in preview */}
-                  <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-black/75 text-[10px] font-mono text-sky-300">
-                    LIVE PREVIEW
-                  </div>
+                  {!cameraError && (
+                    <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-black/75 text-[10px] font-mono text-sky-300">
+                      LIVE PREVIEW
+                    </div>
+                  )}
                 </div>
-
-                {cameraError && (
-                  <p className="text-[11px] text-amber-400 mt-2 flex items-center gap-1">
-                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                    <span>{cameraError}</span>
-                  </p>
-                )}
 
                 {/* 7-Step Script Preview */}
                 <div className="mt-4 p-3.5 rounded-xl bg-slate-950/70 border border-slate-800">
@@ -1228,20 +1083,8 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
                 autoPlay
                 muted
                 playsInline
-                className={`w-full h-full object-cover ${isSimulatedCamera ? 'hidden' : 'block'}`}
+                className="w-full h-full object-cover block"
               />
-
-              {isSimulatedCamera && (
-                <div className="text-center p-6">
-                  <div className="w-16 h-16 rounded-2xl bg-sky-500/20 text-sky-400 flex items-center justify-center mx-auto mb-3">
-                    <Camera className="w-8 h-8 animate-pulse" />
-                  </div>
-                  <div className="text-lg font-bold text-white">Simulador de Gravação em Alta Resolução</div>
-                  <p className="text-xs text-sky-300 mt-1">
-                    Passo {activeStep.number}: {activeStep.title}
-                  </p>
-                </div>
-              )}
 
               {/* Viewfinder Target / Crosshair Grid */}
               <div className="absolute inset-0 pointer-events-none border border-white/10 m-3 sm:m-6 rounded-xl flex items-center justify-center">
@@ -1399,7 +1242,7 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
           <h3 className="text-xl font-bold text-white">
             {processingStage === 'FAILED'
               ? 'Atenção no Processamento da Marca D\'água'
-              : 'Criando Dossiê Verificável ProvaPack'}
+              : 'Criando Registro Técnico ProvaPack'}
           </h3>
 
           <p className="text-xs text-slate-400 mt-2">
@@ -1420,11 +1263,11 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
           {processingStage === 'FAILED' && (
             <div className="mt-5 p-4 rounded-xl bg-amber-950/40 border border-amber-800/80 text-left">
               <div className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
-                <ShieldCheck className="w-4 h-4" />
-                <span>Arquivo Original Preservado com Sucesso</span>
+                <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>O vídeo original foi preservado, mas a versão ProvaPack não pôde ser gerada.</span>
               </div>
-              <p className="text-[11px] text-slate-300 mt-1">
-                O arquivo de vídeo original e sua integridade foram salvos com segurança. Houve uma falha no reprocessamento dos frames da marca d'água: {processingError}
+              <p className="text-[11px] text-slate-300 mt-1.5">
+                O arquivo gravado e o cálculo SHA-256 do original estão seguros. Você pode tentar reprocessar a marca d'água ou salvar imediatamente o dossiê apenas com o vídeo original.
               </p>
               <div className="mt-4 flex flex-wrap gap-2">
                 <button
@@ -1433,14 +1276,14 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
                   className="px-3 py-1.5 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs flex items-center gap-1"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
-                  <span>Tentar Novamente</span>
+                  <span>Tentar novamente</span>
                 </button>
                 <button
                   type="button"
                   onClick={handleSaveOriginalOnly}
                   className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs flex items-center gap-1"
                 >
-                  <span>Prosseguir com Arquivo Original</span>
+                  <span>Salvar apenas original</span>
                 </button>
               </div>
             </div>
@@ -1480,6 +1323,45 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
               <span className="text-slate-400">Fuso Horário Aplicado:</span>
               <span className="text-slate-200 text-[11px] font-mono">{timezoneOffsetFormatted}</span>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* PHASE 4: RECORDING ERROR */}
+      {phase === 'error' && (
+        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-10 shadow-2xl text-center max-w-xl mx-auto">
+          <div className="w-16 h-16 rounded-2xl bg-rose-500/20 text-rose-400 flex items-center justify-center mx-auto mb-4">
+            <AlertTriangle className="w-8 h-8" />
+          </div>
+
+          <h3 className="text-xl font-bold text-white">
+            Falha na Gravação
+          </h3>
+
+          <p className="text-xs text-slate-300 mt-2">
+            {processingError || 'Não foi possível concluir a gravação. Nenhuma evidência foi registrada.'}
+          </p>
+
+          <div className="mt-6 flex items-center justify-center gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                setPhase('setup');
+                setProcessingError(null);
+                startCamera(true);
+              }}
+              className="px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-sky-500/20"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Tentar novamente</span>
+            </button>
+            <button
+              type="button"
+              onClick={onCancel}
+              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold"
+            >
+              Cancelar
+            </button>
           </div>
         </div>
       )}
