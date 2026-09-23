@@ -70,7 +70,7 @@ export const FraudStatsBanner: React.FC<FraudStatsBannerProps> = ({ onClose, inl
         <div className="mt-4 p-3 rounded-lg bg-sky-950/40 border border-sky-800/50 flex items-start gap-2.5">
           <ShieldCheck className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
           <p className="text-xs text-slate-300">
-            <strong className="text-sky-300 font-medium">Princípio de Transparência ProvaPack:</strong> Nossa ferramenta melhora substancialmente a robustez da documentação em disputas com gravação sem cortes e Hash SHA-256 inviolável. Não prometemos vitória automática nem garantia de aceitação pela mediação da plataforma, mas fornecemos a melhor evidência material possível para o vendedor.
+            <strong className="text-sky-300 font-medium">Princípio de Transparência ProvaPack:</strong> Nossa ferramenta melhora substancialmente a robustez da documentação em disputas com gravação sem cortes e integridade SHA-256 registrada. Não prometemos vitória automática nem garantia de aceitação pela mediação da plataforma, mas fornecemos a melhor evidência material possível para o vendedor.
           </p>
         </div>
       </div>

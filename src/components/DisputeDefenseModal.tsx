@@ -49,12 +49,12 @@ Evidências registradas no fluxo sem cortes (${dossier.durationSeconds} segundos
 1. Produto 100% íntegro e em perfeito funcionamento comprovado visualmente.
 2. Número de série e identificadores gravados no chassi e na caixa conferidos.
 3. Inclusão de todos os acessórios listados: ${dossier.accessories || 'Todos os itens originais'}.
-4. Acondicionamento seguro e lacração da embalagem com fita inviolável.
-5. Etiqueta oficial de despacho conferida com o código de rastreamento da transação.
-6. Hash Criptográfico SHA-256 da gravação original: ${dossier.fileHashSha256}
+4. Acondicionamento seguro e lacração da embalagem com fita de lacre.
+5. Etiqueta de despacho conferida com o código de rastreamento da transação.
+6. Integridade SHA-256 da gravação original: ${dossier.fileHashSha256}
 
-O arquivo original possui integridade computacional atestada pelo hash informado.
-Diante da prova inequívoca do envio em perfeito estado e devidamente lacrado, solicitamos o encerramento da disputa em favor do vendedor ou acionamento do seguro de frete.
+O arquivo original possui integridade validada pelo hash informado.
+Diante da evidência do envio em perfeito estado e devidamente lacrado, solicitamos o encerramento da disputa em favor do vendedor ou acionamento do seguro de frete.
 
 Dossiê completo e fotos dos quadros disponíveis em anexo (PDF) e no link de verificação:
 https://provapack.app/verificar/${dossier.id}`;
@@ -77,12 +77,13 @@ https://provapack.app/verificar/${dossier.id}`;
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto p-3 sm:p-4 bg-black/80 backdrop-blur-sm flex items-start sm:items-center justify-center">
-      <div className="relative w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-2xl sm:rounded-3xl p-4 sm:p-7 shadow-2xl my-3 sm:my-8">
+    <div className="fixed inset-0 z-50 overflow-y-auto p-0 sm:p-4 bg-black/80 backdrop-blur-sm flex items-start sm:items-center justify-center">
+      <div className="relative w-full max-w-2xl bg-slate-900 border-0 sm:border border-slate-800 rounded-none sm:rounded-3xl p-4 sm:p-7 shadow-2xl min-h-screen sm:min-h-0 my-0 sm:my-8">
         <button
           onClick={onClose}
           id="btn-close-dispute"
-          className="absolute top-4 sm:top-5 right-4 sm:right-5 p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+          aria-label="Fechar assistente de defesa"
+          className="absolute top-3 sm:top-5 right-3 sm:right-5 p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"
         >
           <X className="w-5 h-5" />
         </button>

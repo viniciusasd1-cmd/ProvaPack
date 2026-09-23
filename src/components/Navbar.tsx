@@ -67,7 +67,8 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             onClick={onOpenPricing}
             id="nav-btn-pricing"
-            className="flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-750 border border-slate-700 text-xs text-slate-200 transition-colors whitespace-nowrap"
+            aria-label="Ver planos e créditos"
+            className="min-h-[40px] flex items-center gap-1 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-750 border border-slate-700 text-xs text-slate-200 transition-colors whitespace-nowrap active:scale-98"
           >
             <CreditCard className="w-3.5 h-3.5 text-sky-400 shrink-0" />
             <div className="text-left">
@@ -85,7 +86,8 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             onClick={onOpenVerify}
             id="nav-btn-verify-lookup"
-            className="hidden sm:flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-300 hover:text-white bg-slate-800/60 hover:bg-slate-800 border border-slate-700 rounded-lg transition-colors whitespace-nowrap"
+            aria-label="Consultar dossiê"
+            className="hidden sm:flex min-h-[40px] items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-300 hover:text-white bg-slate-800/60 hover:bg-slate-800 border border-slate-700 rounded-lg transition-colors whitespace-nowrap active:scale-98"
           >
             <Search className="w-3.5 h-3.5 text-slate-400" />
             <span>Consultar Dossiê</span>
@@ -96,7 +98,8 @@ export const Navbar: React.FC<NavbarProps> = ({
             <button
               onClick={onNewDossier}
               id="nav-btn-new-recording"
-              className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-xs sm:text-sm font-semibold text-white bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 rounded-lg shadow-md shadow-sky-500/25 active:scale-95 transition-all whitespace-nowrap"
+              aria-label="Iniciar novo empacotamento"
+              className="min-h-[40px] flex items-center gap-1.5 sm:gap-2 px-3 sm:px-3.5 py-1.5 sm:py-2 text-xs sm:text-sm font-semibold text-white bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 rounded-lg shadow-md shadow-sky-500/25 active:scale-95 transition-all whitespace-nowrap"
             >
               <Plus className="w-4 h-4 shrink-0" />
               <span className="hidden sm:inline">Novo Empacotamento</span>

@@ -25,7 +25,7 @@ export const RECORDING_STEPS: RecordingStepDef[] = [
     number: 3,
     id: 'serial',
     title: 'Mostre o Número de Série',
-    shortDesc: 'Identificador único inviolável',
+    shortDesc: 'Identificador único registrado',
     instruction: 'Aponte a câmera com nitidez para a etiqueta de IMEI, Serial Number, Part Number ou selo Anatel.',
     iconName: 'QrCode',
     minimumRecommendedSeconds: 8,
@@ -56,7 +56,7 @@ export const RECORDING_STEPS: RecordingStepDef[] = [
     id: 'sealed',
     title: 'Feche o Pacote',
     shortDesc: 'Lacre e fita de segurança',
-    instruction: 'Passe a fita adesiva, dobre as abas da caixa ou envelope e exiba o fechamento seguro e inviolável.',
+    instruction: 'Passe a fita adesiva, dobre as abas da caixa ou envelope e exiba o fechamento seguro com fita de lacre.',
     iconName: 'ShieldCheck',
     minimumRecommendedSeconds: 8,
     tip: 'Se utilizar fita gomada personalizada ou lacre picotado, mostre o número do lacre!'

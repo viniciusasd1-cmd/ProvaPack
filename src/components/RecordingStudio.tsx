@@ -1308,7 +1308,7 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
               </span>
             </div>
             <div className="flex items-center justify-between text-xs">
-              <span className="text-slate-400">Marca d'água pericial permanente:</span>
+              <span className="text-slate-400">Marca d'água nos frames:</span>
               <span className={processedBlobHolder ? "text-emerald-400 font-bold flex items-center gap-1" : "text-sky-300"}>
                 <Sparkles className="w-3.5 h-3.5" /> {processedBlobHolder ? 'Incorporada aos Frames' : `${processingPct}%`}
               </span>

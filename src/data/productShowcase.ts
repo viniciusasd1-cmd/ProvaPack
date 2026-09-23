@@ -163,7 +163,7 @@ export const PRODUCT_SHOWCASES: ShowcaseProduct[] = [
         tag: '01:24',
         imageUrl: 'https://images.unsplash.com/photo-1549465220-1a8b9238cd48?auto=format&fit=crop&w=600&q=80',
         caption: 'Etiqueta Shopee Xpress impressa',
-        proofDetail: 'Etiqueta térmica oficial da Shopee com número de rastreio e comprovante do pacote pronto para coleta.'
+        proofDetail: 'Etiqueta térmica da Shopee com número de rastreio e comprovante do pacote pronto para coleta.'
       }
     ]
   },
@@ -225,7 +225,7 @@ export const PRODUCT_SHOWCASES: ShowcaseProduct[] = [
         stepName: '6. Fita Lacre',
         tag: '01:14',
         imageUrl: 'https://images.unsplash.com/photo-1566576912321-d58ddd7a6088?auto=format&fit=crop&w=600&q=80',
-        caption: 'Fita personalizada inviolável',
+        caption: 'Fita personalizada de segurança',
         proofDetail: 'Aplicação contínua de fita adesiva de segurança nas duas extremidades da caixa.'
       },
       {
@@ -296,7 +296,7 @@ export const PRODUCT_SHOWCASES: ShowcaseProduct[] = [
         stepName: '6. Fita Lacre',
         tag: '00:58',
         imageUrl: 'https://images.unsplash.com/photo-1566576912321-d58ddd7a6088?auto=format&fit=crop&w=600&q=80',
-        caption: 'Lacre adesivo hot-melt inviolável',
+        caption: 'Lacre adesivo hot-melt de segurança',
         proofDetail: 'Aba de segurança termo-selada mostrando evidência imediata caso haja tentativa de abertura.'
       },
       {
@@ -321,7 +321,7 @@ export function showcaseProductToDossier(prod: ShowcaseProduct): Dossier {
     serialNumber: prod.serialNumber,
     accessories: prod.steps[3]?.proofDetail || prod.steps[3]?.caption || 'Acessórios originais conferidos na gravação',
     packageType: `${prod.steps[4]?.caption || 'Embalagem protetora'}, ${prod.steps[5]?.caption || 'fita de segurança lacrada'}`,
-    sellerName: 'TechStore SP Oficial',
+    sellerName: 'TechStore SP',
     recordedAt: '2026-09-20T14:32:10.000Z',
     formattedDate: '20/09/2026, 14:32:10 (Horário de Brasília)',
     durationSeconds: prod.durationSeconds,

@@ -35,7 +35,7 @@ export async function generateDossierPDF(dossier: Dossier): Promise<void> {
   doc.setTextColor(56, 189, 248); // sky-400
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8);
-  doc.text('REGISTRO OFICIAL', pageWidth - margin - 50, 11);
+  doc.text('RELATÓRIO TÉCNICO', pageWidth - margin - 50, 11);
   doc.setTextColor(255, 255, 255);
   doc.setFontSize(10);
   doc.text(dossier.id, pageWidth - margin - 50, 18);

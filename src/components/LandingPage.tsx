@@ -58,7 +58,7 @@ O ProvaPack não garante o resultado de uma disputa, que continua sujeito às re
     },
     {
       q: 'Como o Hash SHA-256 comprova que o vídeo não sofreu cortes nem edição?',
-      a: 'O Hash SHA-256 é uma impressão digital matemática gerada a partir de cada byte do arquivo de vídeo original. Qualquer tentativa de corte, emenda ou edição posterior altera completamente essa sequência. O mediador pode verificar que o vídeo gravado no despacho é idêntico e intacto ao documento pericial.'
+      a: 'O Hash SHA-256 é uma impressão digital matemática gerada a partir de cada byte do arquivo de vídeo original. Qualquer tentativa de corte, emenda ou edição posterior altera completamente essa sequência. O mediador pode verificar que o vídeo gravado no despacho é idêntico e intacto ao documento registrado.'
     },
     {
       q: 'O que acontece após eu utilizar os 10 envios gratuitos?',
@@ -103,7 +103,7 @@ O ProvaPack não garante o resultado de uma disputa, que continua sujeito às re
         </h1>
 
         <p className="mt-5 text-base sm:text-lg text-slate-300 max-w-2xl mx-auto leading-relaxed">
-          Embale em <strong>60 segundos</strong> com roteiro de 7 marcos guiados, gere um <strong>dossiê pericial com Hash SHA-256 à prova de cortes</strong> e blinde seus lucros em mediações injustas.
+          Embale em <strong>60 segundos</strong> com roteiro de 7 marcos guiados, gere um <strong>dossiê com integridade SHA-256 e gravação sem cortes</strong> e blinde seus lucros em mediações injustas.
         </p>
 
         {/* Strong Calls to Action (CTAs) */}
@@ -323,7 +323,7 @@ O ProvaPack não garante o resultado de uma disputa, que continua sujeito às re
 
               <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800/80">
                 <span className="text-xs font-semibold text-sky-400 block mb-1">
-                  Evidência Pericial do Marco:
+                  Evidência Registrada do Marco:
                 </span>
                 <p className="text-xs sm:text-sm text-slate-200 leading-relaxed">
                   {activePhotoModal.proofDetail}
@@ -403,7 +403,7 @@ O ProvaPack não garante o resultado de uma disputa, que continua sujeito às re
           <div className="rounded-3xl bg-sky-950/20 border border-sky-600/50 p-6 sm:p-7 relative overflow-hidden shadow-lg shadow-sky-500/5">
             <div className="flex items-center gap-2 text-sky-400 font-bold text-sm mb-4">
               <ShieldCheck className="w-5 h-5 text-emerald-400" />
-              <span>Com o ProvaPack (Envio Blindado e Incontestável)</span>
+              <span>Com o ProvaPack (Envio Blindado e Estruturado)</span>
             </div>
 
             <ul className="space-y-3.5 text-xs sm:text-sm text-slate-200">
@@ -413,15 +413,15 @@ O ProvaPack não garante o resultado de uma disputa, que continua sujeito às re
               </li>
               <li className="flex items-start gap-2.5">
                 <Check className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                <span><strong>Hash SHA-256 e carimbo oficial:</strong> prova matemática de que o arquivo não sofreu corte.</span>
+                <span><strong>Hash SHA-256 e carimbo de tempo:</strong> validação matemática de que o arquivo não sofreu corte.</span>
               </li>
               <li className="flex items-start gap-2.5">
                 <Check className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                <span><strong>Relatório Pericial em PDF:</strong> documento formal de 1 página que os mediadores analisam rápido.</span>
+                <span><strong>Relatório em PDF:</strong> documento formal de 1 página que os mediadores analisam rápido.</span>
               </li>
               <li className="flex items-start gap-2.5">
                 <Check className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                <span><strong>Assistente de Defesa com IA:</strong> gera em 5 segundos o texto jurídico para colar na mediação.</span>
+                <span><strong>Assistente de Defesa com IA:</strong> gera em 5 segundos o texto fundamentado para colar na mediação.</span>
               </li>
             </ul>
           </div>
@@ -459,7 +459,7 @@ O ProvaPack não garante o resultado de uma disputa, que continua sujeito às re
             </div>
             <h3 className="text-base font-bold text-white">Carimbo & Hash SHA-256</h3>
             <p className="mt-2 text-xs text-slate-400 leading-relaxed">
-              Ao concluir, o ProvaPack extrai os quadros de alta resolução, carimba a data/hora oficial no fuso de Brasília e calcula o resumo criptográfico do vídeo original.
+              Ao concluir, o ProvaPack extrai os quadros de alta resolução, carimba a data/hora no fuso de Brasília e calcula o resumo criptográfico do vídeo original.
             </p>
           </div>
 
@@ -469,7 +469,7 @@ O ProvaPack não garante o resultado de uma disputa, que continua sujeito às re
             </div>
             <h3 className="text-base font-bold text-white">Dossiê e Defesa em 1 Clique</h3>
             <p className="mt-2 text-xs text-slate-400 leading-relaxed">
-              Receba o PDF oficial e o link público de conferência. Se o comprador contestar, a IA gera o texto de contestação formal em segundos.
+              Receba o Relatório PDF e o link público de conferência. Se o comprador contestar, a IA gera o texto de contestação formal em segundos.
             </p>
           </div>
         </div>

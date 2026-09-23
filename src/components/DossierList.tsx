@@ -169,8 +169,8 @@ export const DossierList: React.FC<DossierListProps> = ({
                   <button
                     type="button"
                     onClick={(e) => handleDownloadPdf(dossier, e)}
-                    className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-                    title="Baixar PDF Oficial"
+                    className="min-h-[36px] min-w-[36px] p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors flex items-center justify-center"
+                    title="Baixar Relatório PDF"
                   >
                     <FileText className="w-4 h-4 text-sky-400" />
                   </button>
@@ -178,7 +178,7 @@ export const DossierList: React.FC<DossierListProps> = ({
                   <button
                     type="button"
                     onClick={(e) => handleCopyLink(dossier, e)}
-                    className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                    className="min-h-[36px] min-w-[36px] p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors flex items-center justify-center"
                     title="Copiar Link de Compartilhamento"
                   >
                     {copiedId === dossier.id ? <Check className="w-4 h-4 text-emerald-400" /> : <Share2 className="w-4 h-4" />}
@@ -190,18 +190,18 @@ export const DossierList: React.FC<DossierListProps> = ({
                       e.stopPropagation();
                       onOpenDispute(dossier);
                     }}
-                    className="px-2.5 py-1 rounded-lg bg-indigo-950 hover:bg-indigo-900 text-indigo-300 border border-indigo-800 text-[11px] font-semibold flex items-center gap-1"
+                    className="min-h-[36px] px-2.5 py-1.5 rounded-lg bg-indigo-950 hover:bg-indigo-900 text-indigo-300 border border-indigo-800 text-[11px] font-semibold flex items-center gap-1"
                   >
-                    <Sparkles className="w-3 h-3" />
+                    <Sparkles className="w-3.5 h-3.5" />
                     <span>Defesa IA</span>
                   </button>
 
                   <button
                     type="button"
-                    className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-[11px] font-semibold flex items-center gap-1"
+                    className="min-h-[36px] px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-[11px] font-semibold flex items-center gap-1"
                   >
                     <span>Ver</span>
-                    <ArrowUpRight className="w-3 h-3 text-slate-400" />
+                    <ArrowUpRight className="w-3.5 h-3.5 text-slate-400" />
                   </button>
                 </div>
               </div>
