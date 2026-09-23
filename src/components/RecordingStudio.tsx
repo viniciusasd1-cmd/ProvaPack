@@ -57,6 +57,7 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
   const [showTipSheet, setShowTipSheet] = useState(false);
   const [showInstructionModal, setShowInstructionModal] = useState(false);
   const [showGalleryModal, setShowGalleryModal] = useState(false);
+  const [showCancelConfirmModal, setShowCancelConfirmModal] = useState(false);
 
   useEffect(() => {
     onPhaseChange?.(phase);
@@ -749,7 +750,17 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
     }, 1200);
   };
 
-  const handleCancelRecording = () => {
+  const requestCancelRecording = () => {
+    // If recording has active progress, ask for confirmation to prevent accidental loss
+    if (recordingSeconds > 0 || capturedCheckpoints.length > 0) {
+      setShowCancelConfirmModal(true);
+    } else {
+      executeCancelRecording();
+    }
+  };
+
+  const executeCancelRecording = () => {
+    setShowCancelConfirmModal(false);
     if (timerIntervalRef.current) {
       clearInterval(timerIntervalRef.current);
       timerIntervalRef.current = null;
@@ -1085,7 +1096,7 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
 
               <button
                 type="button"
-                onClick={handleCancelRecording}
+                onClick={requestCancelRecording}
                 className="text-xs text-slate-400 hover:text-white px-2 py-1 rounded-lg border border-slate-800 hover:bg-slate-800/80 transition-colors ml-1"
                 title="Cancelar gravação"
               >
@@ -1195,7 +1206,7 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={handleCancelRecording}
+                      onClick={executeCancelRecording}
                       className="min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold active:scale-95"
                     >
                       Cancelar
@@ -1556,6 +1567,39 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
                 >
                   Voltar à Gravação
                 </button>
+              </div>
+            </div>
+          )}
+
+          {/* Modal de Confirmação para Evitar Descarte Acidental da Gravação */}
+          {showCancelConfirmModal && (
+            <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/85 backdrop-blur-sm p-4">
+              <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-2xl animate-in fade-in zoom-in-95 duration-150 text-center">
+                <div className="w-12 h-12 rounded-2xl bg-amber-500/20 text-amber-400 flex items-center justify-center mx-auto mb-3">
+                  <AlertTriangle className="w-6 h-6" />
+                </div>
+                <h4 className="text-sm font-bold text-white mb-1.5">
+                  Descartar gravação em andamento?
+                </h4>
+                <p className="text-xs text-slate-300 mb-5 leading-relaxed">
+                  O vídeo contínuo e todas as fotos registradas até o momento serão descartados. Esta ação não pode ser desfeita.
+                </p>
+                <div className="flex flex-col sm:flex-row items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowCancelConfirmModal(false)}
+                    className="w-full sm:flex-1 min-h-[44px] py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-white transition-colors"
+                  >
+                    Continuar Gravando
+                  </button>
+                  <button
+                    type="button"
+                    onClick={executeCancelRecording}
+                    className="w-full sm:flex-1 min-h-[44px] py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-xs font-bold text-white transition-colors"
+                  >
+                    Descartar e Sair
+                  </button>
+                </div>
               </div>
             </div>
           )}
