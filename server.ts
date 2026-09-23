@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
@@ -39,8 +40,51 @@ function getSupabase(): SupabaseClient | null {
   return supabaseClient;
 }
 
-// In-memory runtime cache for registered dossiers
+// Local persistent registry for dossiers (persisted across restarts in ./data/registered_dossiers.json)
+const DOSSIERS_DATA_DIR = path.join(__dirname, 'data');
+const DOSSIERS_DATA_FILE = path.join(DOSSIERS_DATA_DIR, 'registered_dossiers.json');
 const registeredDossiers = new Map<string, any>();
+
+function initServerDossiersRegistry() {
+  try {
+    if (fs.existsSync(DOSSIERS_DATA_FILE)) {
+      const raw = fs.readFileSync(DOSSIERS_DATA_FILE, 'utf-8');
+      const items = JSON.parse(raw);
+      if (Array.isArray(items)) {
+        for (const item of items) {
+          if (item.public_id) registeredDossiers.set(item.public_id, item);
+          if (item.recording_id) registeredDossiers.set(item.recording_id, item);
+          if (item.id) registeredDossiers.set(item.id, item);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[Server Registry] Não foi possível ler registros salvos do disco:', err);
+  }
+}
+initServerDossiersRegistry();
+
+function persistServerDossier(record: any) {
+  try {
+    if (!fs.existsSync(DOSSIERS_DATA_DIR)) {
+      fs.mkdirSync(DOSSIERS_DATA_DIR, { recursive: true });
+    }
+    let list: any[] = [];
+    if (fs.existsSync(DOSSIERS_DATA_FILE)) {
+      try {
+        list = JSON.parse(fs.readFileSync(DOSSIERS_DATA_FILE, 'utf-8'));
+      } catch {
+        list = [];
+      }
+    }
+    const filtered = list.filter(item => item.public_id !== record.public_id && item.id !== record.id);
+    filtered.unshift(record);
+    // Keep up to 200 records on disk
+    fs.writeFileSync(DOSSIERS_DATA_FILE, JSON.stringify(filtered.slice(0, 200), null, 2), 'utf-8');
+  } catch (err) {
+    console.warn('[Server Registry] Erro ao persistir dossiê no disco:', err);
+  }
+}
 
 // API Routes
 app.get('/api/health', (req: Request, res: Response) => {
@@ -120,33 +164,41 @@ app.post('/api/dossiers', async (req: Request, res: Response) => {
       status: dossier.status || 'validado'
     };
 
-    // Store in memory cache
-    registeredDossiers.set(publicId, { ...dossier, ...payload });
+    // Store in memory cache & disk persistence
+    const savedRecord = { ...dossier, ...payload };
+    registeredDossiers.set(publicId, savedRecord);
     if (recordingId && recordingId !== publicId) {
-      registeredDossiers.set(recordingId, { ...dossier, ...payload });
+      registeredDossiers.set(recordingId, savedRecord);
     }
+    persistServerDossier(savedRecord);
 
-    // Persist to Supabase if configured
+    // Persist to Supabase if configured (resilient against missing table or network failures)
+    let persistedToSupabase = false;
+    let supabaseNotice: string | null = null;
     const supabase = getSupabase();
     if (supabase) {
-      const { error: dbError } = await supabase
-        .from('provapacks')
-        .upsert(payload, { onConflict: 'public_id' });
+      try {
+        const { error: dbError } = await supabase
+          .from('provapacks')
+          .upsert(payload, { onConflict: 'public_id' });
 
-      if (dbError) {
-        console.error('[Supabase Error] Falha ao registrar provapack:', dbError);
-        return res.status(500).json({
-          success: false,
-          error: 'Falha ao registrar no Supabase: ' + dbError.message,
-          dossierId: publicId
-        });
+        if (dbError) {
+          console.warn('[Supabase Aviso] Falha ao persistir provapack no Supabase (verifique se a tabela provapacks foi criada):', dbError.message || dbError);
+          supabaseNotice = dbError.message || 'Tabela pendente no Supabase';
+        } else {
+          persistedToSupabase = true;
+        }
+      } catch (err: any) {
+        console.warn('[Supabase Aviso] Exceção de conexão com Supabase:', err?.message || err);
+        supabaseNotice = err?.message || 'Erro de conexão Supabase';
       }
     }
 
     return res.json({ 
       success: true, 
       dossierId: publicId,
-      persistedToSupabase: !!supabase
+      persistedToSupabase,
+      warning: supabaseNotice ? `Dossiê registrado localmente com sucesso. Supabase: ${supabaseNotice}` : undefined
     });
   } catch (err: any) {
     console.error('Erro ao salvar dossiê:', err);
@@ -164,16 +216,17 @@ app.get('/api/dossiers/:id', async (req: Request, res: Response) => {
 
     const supabase = getSupabase();
     if (supabase) {
-      const { data, error } = await supabase
-        .from('provapacks')
-        .select('*')
-        .or(`public_id.eq.${rawId},recording_id.eq.${rawId}`)
-        .maybeSingle();
+      try {
+        const { data, error } = await supabase
+          .from('provapacks')
+          .select('*')
+          .or(`public_id.eq.${rawId},recording_id.eq.${rawId}`)
+          .maybeSingle();
 
-      if (data && !error) {
-        return res.json({
-          success: true,
-          dossier: {
+        if (data && !error) {
+          return res.json({
+            success: true,
+            dossier: {
             id: data.public_id,
             public_id: data.public_id,
             recordingId: data.recording_id,
@@ -206,7 +259,10 @@ app.get('/api/dossiers/:id', async (req: Request, res: Response) => {
           }
         });
       }
+    } catch (supabaseQueryErr: any) {
+      console.warn('[Supabase Aviso] Erro na consulta ao Supabase, buscando no registro local:', supabaseQueryErr?.message || supabaseQueryErr);
     }
+  }
 
     // Check runtime memory cache
     const cached = registeredDossiers.get(rawId);

@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { 
   Camera, Video, StopCircle, CheckCircle, ArrowRight, ArrowLeft, 
   RotateCw, AlertTriangle, ShieldCheck, Sparkles, Hash, Scan, 
-  Layers, Package, Check, HelpCircle, RefreshCw, ShieldAlert
+  Layers, Package, Check, HelpCircle, RefreshCw, ShieldAlert, X
 } from 'lucide-react';
 import { Marketplace, Dossier, CheckpointFrame, SellerAccount, EvidenceRecording, ProcessingStatus, TimeSource } from '../types';
 import { RECORDING_STEPS } from '../data/steps';
@@ -20,6 +20,7 @@ interface RecordingStudioProps {
   seller: SellerAccount;
   onCancel: () => void;
   onDossierCreated: (dossier: Dossier) => void;
+  onPhaseChange?: (phase: 'setup' | 'recording' | 'processing' | 'error') => void;
 }
 
 // Helper for safe video mime types supported across Chromium, Safari, Firefox and mobile
@@ -46,10 +47,20 @@ const getSupportedVideoMimeType = (): string => {
 export const RecordingStudio: React.FC<RecordingStudioProps> = ({
   seller,
   onCancel,
-  onDossierCreated
+  onDossierCreated,
+  onPhaseChange
 }) => {
   // Wizard state: 'setup' | 'recording' | 'processing' | 'error'
   const [phase, setPhase] = useState<'setup' | 'recording' | 'processing' | 'error'>('setup');
+
+  // Mobile immersive modals
+  const [showTipSheet, setShowTipSheet] = useState(false);
+  const [showInstructionModal, setShowInstructionModal] = useState(false);
+  const [showGalleryModal, setShowGalleryModal] = useState(false);
+
+  useEffect(() => {
+    onPhaseChange?.(phase);
+  }, [phase, onPhaseChange]);
 
   // Order Details
   const [marketplace, setMarketplace] = useState<Marketplace>('Mercado Livre');
@@ -220,29 +231,38 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
     const hasLiveVideo = video && (video.videoWidth > 0 || video.readyState >= 2);
 
     if (hasLiveVideo && video) {
-      const width = video.videoWidth || 1280;
-      const height = video.videoHeight || 720;
+      const origWidth = video.videoWidth || 1280;
+      const origHeight = video.videoHeight || 720;
+
+      // Scale to max 800px width for checkpoint snapshots to optimize memory and prevent quota issues
+      const maxWidth = 800;
+      const scale = Math.min(1, maxWidth / origWidth);
+      const width = Math.round(origWidth * scale);
+      const height = Math.round(origHeight * scale);
+
       canvas.width = width;
       canvas.height = height;
 
       // Draw real live camera frame
       ctx.drawImage(video, 0, 0, width, height);
 
-      // Forensic watermark
-      ctx.fillStyle = 'rgba(15, 23, 42, 0.72)';
-      ctx.fillRect(0, height - 38, width, 38);
+      // Watermark bar
+      const barHeight = Math.max(26, Math.round(36 * scale));
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.78)';
+      ctx.fillRect(0, height - barHeight, width, barHeight);
 
+      const fontSize = Math.max(10, Math.round(13 * scale));
       ctx.fillStyle = '#38bdf8';
-      ctx.font = 'bold 14px "JetBrains Mono", monospace';
+      ctx.font = `bold ${fontSize}px "JetBrains Mono", monospace`;
       ctx.textAlign = 'left';
-      ctx.fillText(`PROVAPACK • PASSO ${step.number}/7: ${step.title.toUpperCase()}`, 16, height - 14);
+      ctx.fillText(`PROVAPACK • PASSO ${step.number}/7: ${step.title.toUpperCase()}`, 12, height - Math.round(barHeight / 3));
 
       ctx.fillStyle = '#f8fafc';
-      ctx.font = '13px "JetBrains Mono", monospace';
+      ctx.font = `${fontSize}px "JetBrains Mono", monospace`;
       ctx.textAlign = 'right';
-      ctx.fillText(`${new Date().toLocaleTimeString('pt-BR')} • ${orderNumber || 'PEDIDO'}`, width - 16, height - 14);
+      ctx.fillText(`${new Date().toLocaleTimeString('pt-BR')} • ${orderNumber || 'PEDIDO'}`, width - 12, height - Math.round(barHeight / 3));
 
-      return canvas.toDataURL('image/jpeg', 0.90);
+      return canvas.toDataURL('image/jpeg', 0.78);
     }
 
     return '';
@@ -729,10 +749,25 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
     }, 1200);
   };
 
+  const handleCancelRecording = () => {
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+      timerIntervalRef.current = null;
+    }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try { mediaRecorderRef.current.stop(); } catch {}
+    }
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach(t => t.stop());
+      mediaStreamRef.current = null;
+    }
+    onCancel();
+  };
+
   const activeStep = RECORDING_STEPS[currentStepIdx] || RECORDING_STEPS[0];
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6">
+    <div className={phase === 'recording' ? 'w-full md:max-w-6xl md:mx-auto md:px-4 md:py-6' : 'max-w-6xl mx-auto px-4 py-6'}>
       {/* Hidden canvas for image frame extraction */}
       <canvas ref={canvasRef} className="hidden" />
 
@@ -1015,9 +1050,52 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
 
       {/* PHASE 2: ACTIVE 7-STEP CONTINUOUS RECORDING */}
       {phase === 'recording' && (
-        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 sm:p-7 shadow-2xl">
-          {/* Top recording bar: Timer, REC badge, and Order reference */}
-          <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-800">
+        <div className="fixed inset-0 z-50 flex flex-col bg-slate-950 text-slate-100 overflow-hidden md:static md:inset-auto md:z-auto md:bg-slate-900 md:border md:border-slate-800 md:rounded-3xl md:p-5 md:sm:p-7 md:shadow-2xl md:overflow-visible">
+          {/* MOBILE COMPACT HEADER (Requirement 2: ProvaPack logo, 2/7, height 48-56px, no commercial clutter) */}
+          <header className="h-12 sm:h-14 px-3 sm:px-4 flex items-center justify-between border-b border-slate-800 bg-slate-900/95 backdrop-blur-md shrink-0 md:hidden z-30 pt-[env(safe-area-inset-top)]">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-sky-500 to-indigo-600 flex items-center justify-center shadow-md shadow-sky-500/20">
+                <ShieldCheck className="w-4 h-4 text-white" />
+              </div>
+              <span className="font-bold text-sm text-white tracking-tight font-['Plus_Jakarta_Sans']">
+                Prova<span className="text-sky-400">Pack</span>
+              </span>
+            </div>
+
+            {/* Mobile Progress indicator: compact dots + 2/7 badge */}
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1">
+                {RECORDING_STEPS.map((step, idx) => (
+                  <span
+                    key={step.id}
+                    className={`h-1.5 rounded-full transition-all ${
+                      idx === currentStepIdx
+                        ? 'w-4 bg-sky-400'
+                        : idx < currentStepIdx || capturedCheckpoints.some(cp => cp.stepId === step.id)
+                        ? 'w-1.5 bg-emerald-400'
+                        : 'w-1.5 bg-slate-700'
+                    }`}
+                  />
+                ))}
+              </div>
+
+              <span className="px-2 py-0.5 rounded-full text-xs font-mono font-bold bg-sky-950 text-sky-400 border border-sky-800">
+                {activeStep.number}/7
+              </span>
+
+              <button
+                type="button"
+                onClick={handleCancelRecording}
+                className="text-xs text-slate-400 hover:text-white px-2 py-1 rounded-lg border border-slate-800 hover:bg-slate-800/80 transition-colors ml-1"
+                title="Cancelar gravação"
+              >
+                Sair
+              </button>
+            </div>
+          </header>
+
+          {/* DESKTOP TOP RECORDING BAR (Preserved on >= 768px, hidden on mobile) */}
+          <div className="hidden md:flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-800">
             <div className="flex items-center gap-3">
               <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-red-950/80 border border-red-800/80 text-red-400 text-xs font-bold uppercase tracking-wider animate-pulse">
                 <div className="w-2.5 h-2.5 rounded-full bg-red-500" />
@@ -1043,8 +1121,8 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
             </div>
           </div>
 
-          {/* Stepper Header (1 to 7) */}
-          <div className="mt-4 grid grid-cols-7 gap-1 sm:gap-2">
+          {/* DESKTOP STEPPER HEADER (1 to 7 grid, preserved on >= 768px, hidden on mobile) */}
+          <div className="hidden md:grid mt-4 grid-cols-7 gap-1 sm:gap-2">
             {RECORDING_STEPS.map((step, idx) => {
               const isActive = idx === currentStepIdx;
               const isPast = idx < currentStepIdx;
@@ -1074,10 +1152,10 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
             })}
           </div>
 
-          {/* Central Recording Studio Canvas / Viewfinder */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mt-5">
+          {/* CENTRAL RECORDING CANVAS / VIEWFINDER */}
+          <div className="flex-1 min-h-0 flex flex-col p-2.5 sm:p-3 md:p-0 md:grid md:grid-cols-12 md:gap-6 md:mt-5 overflow-hidden md:overflow-visible">
             {/* Viewfinder Video Stream with Guidance Overlays */}
-            <div className="lg:col-span-8 relative aspect-video bg-black rounded-2xl overflow-hidden border border-slate-800 flex items-center justify-center">
+            <div className="flex-1 min-h-0 relative w-full rounded-2xl overflow-hidden border border-slate-800 flex items-center justify-center bg-black shadow-lg md:flex-initial md:aspect-video md:col-span-8">
               <video
                 ref={assignVideoRef}
                 autoPlay
@@ -1088,14 +1166,106 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
 
               {/* Viewfinder Target / Crosshair Grid */}
               <div className="absolute inset-0 pointer-events-none border border-white/10 m-3 sm:m-6 rounded-xl flex items-center justify-center">
-                <div className="w-8 sm:w-12 h-8 sm:h-12 border-t-2 border-l-2 border-sky-400 absolute top-0 left-0" />
-                <div className="w-8 sm:w-12 h-8 sm:h-12 border-t-2 border-r-2 border-sky-400 absolute top-0 right-0" />
-                <div className="w-8 sm:w-12 h-8 sm:h-12 border-b-2 border-l-2 border-sky-400 absolute bottom-0 left-0" />
-                <div className="w-8 sm:w-12 h-8 sm:h-12 border-b-2 border-r-2 border-sky-400 absolute bottom-0 right-0" />
+                <div className="w-6 sm:w-12 h-6 sm:h-12 border-t-2 border-l-2 border-sky-400 absolute top-0 left-0" />
+                <div className="w-6 sm:w-12 h-6 sm:h-12 border-t-2 border-r-2 border-sky-400 absolute top-0 right-0" />
+                <div className="w-6 sm:w-12 h-6 sm:h-12 border-b-2 border-l-2 border-sky-400 absolute bottom-0 left-0" />
+                <div className="w-6 sm:w-12 h-6 sm:h-12 border-b-2 border-r-2 border-sky-400 absolute bottom-0 right-0" />
               </div>
 
-              {/* Active Step Prompt Pin on Video */}
-              <div className="absolute top-2 sm:top-4 left-2 sm:left-4 right-2 sm:right-4 pointer-events-none">
+              {/* Camera Error Screen (Requirement 13: same area on mobile & desktop) */}
+              {cameraError && (
+                <div className="absolute inset-0 bg-slate-950/95 flex flex-col items-center justify-center p-4 text-center z-30">
+                  <div className="w-12 h-12 rounded-2xl bg-rose-500/20 text-rose-400 flex items-center justify-center mb-3">
+                    <AlertTriangle className="w-6 h-6" />
+                  </div>
+                  <div className="text-sm font-bold text-white mb-1">
+                    Não foi possível acessar a câmera.
+                  </div>
+                  <p className="text-[11px] text-slate-400 max-w-xs mb-4">
+                    Verifique as permissões de acesso ao dispositivo no navegador.
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => startCamera(true)}
+                      className="min-h-[44px] px-3.5 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 active:scale-95"
+                    >
+                      <RotateCw className="w-3.5 h-3.5" />
+                      <span>Tentar novamente</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCancelRecording}
+                      className="min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold active:scale-95"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* MOBILE OVERLAY: Compact REC & Timer Badge (Requirement 4) */}
+              <div className="md:hidden absolute top-2.5 left-2.5 z-20 flex items-center gap-2">
+                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/75 backdrop-blur-md border border-red-500/40 text-red-400 text-[11px] font-mono font-bold shadow-md">
+                  <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                  <span>REC</span>
+                  <span className="text-white ml-1">{formatSecondsToTime(recordingSeconds)}</span>
+                </div>
+              </div>
+
+              {/* MOBILE OVERLAY: Quick camera switch button */}
+              <div className="md:hidden absolute top-2.5 right-2.5 z-20 flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => startCamera(false)}
+                  className="p-1.5 rounded-full bg-black/60 backdrop-blur-md border border-slate-700/80 text-slate-300 hover:text-white text-xs active:scale-90 transition-transform"
+                  title="Alternar Câmera"
+                >
+                  <RotateCw className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {/* MOBILE OVERLAY: Active Step Guidance Pin on Video (Requirement 6 & 8) */}
+              <div className="md:hidden absolute top-11 left-2.5 right-2.5 z-20">
+                <div className="bg-slate-950/85 backdrop-blur-md border border-slate-700/80 rounded-xl p-2.5 shadow-xl">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="w-5 h-5 rounded-full bg-sky-500 text-slate-950 text-[10px] font-extrabold flex items-center justify-center shrink-0">
+                        {activeStep.number}
+                      </span>
+                      <span className="text-xs font-bold text-white truncate">
+                        {activeStep.title}
+                      </span>
+                    </div>
+
+                    {/* Compact Anti-Fraud Tip Button (Requirement 8) */}
+                    <button
+                      type="button"
+                      onClick={() => setShowTipSheet(true)}
+                      className="min-h-[26px] px-2 py-0.5 rounded-lg bg-amber-950/70 border border-amber-700/70 text-amber-300 text-[10px] font-semibold flex items-center gap-1 shrink-0 active:scale-95 transition-transform"
+                    >
+                      <Sparkles className="w-3 h-3 text-amber-400" />
+                      <span>Dica</span>
+                    </button>
+                  </div>
+
+                  <p className="text-[11px] text-slate-200 mt-1 leading-tight line-clamp-2">
+                    {activeStep.instruction}
+                  </p>
+                  {activeStep.instruction.length > 70 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowInstructionModal(true)}
+                      className="text-[10px] text-sky-400 font-semibold underline mt-0.5 block"
+                    >
+                      Ver instrução
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* DESKTOP OVERLAY: Active Step Prompt Pin on Video */}
+              <div className="hidden md:block absolute top-2 sm:top-4 left-2 sm:left-4 right-2 sm:right-4 pointer-events-none">
                 <div className="bg-slate-950/90 backdrop-blur-md border border-slate-700/80 rounded-xl sm:rounded-2xl p-2 sm:p-3 shadow-xl max-w-lg">
                   <div className="flex items-center gap-1.5 sm:gap-2">
                     <span className="w-5 h-5 sm:w-6 sm:h-6 rounded-full bg-sky-500 text-slate-950 text-[10px] sm:text-xs font-extrabold flex items-center justify-center shrink-0">
@@ -1109,8 +1279,8 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
                 </div>
               </div>
 
-              {/* Live Forensic Watermark Badge (Bottom Right of Viewfinder) */}
-              <div className="absolute bottom-2 sm:bottom-4 right-2 sm:right-4 z-20 pointer-events-none">
+              {/* DESKTOP OVERLAY: Live Forensic Watermark Badge */}
+              <div className="hidden md:block absolute bottom-2 sm:bottom-4 right-2 sm:right-4 z-20 pointer-events-none">
                 <div className="bg-slate-950/85 backdrop-blur-md border border-slate-700/80 rounded-xl p-2 sm:p-2.5 text-right shadow-2xl font-mono">
                   <div className="text-[10px] sm:text-[11px] font-bold text-sky-400 tracking-wider">
                     PROVAPACK
@@ -1127,8 +1297,42 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
                 </div>
               </div>
 
-              {/* Instant Frame Capture Button on Viewfinder */}
-              <div className="absolute bottom-2 sm:bottom-4 left-2 sm:left-4 z-20 flex items-center gap-2">
+              {/* MOBILE OVERLAY: Photo Checkpoint Button & Discrete Indicator (Requirement 9) */}
+              <div className="md:hidden absolute bottom-2.5 left-2.5 right-2.5 z-20 flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => capturedCheckpoints.length > 0 && setShowGalleryModal(true)}
+                  className="min-h-[44px] px-3 py-2 rounded-xl bg-black/70 backdrop-blur-md border border-slate-700/80 text-slate-300 text-xs font-mono flex items-center gap-1.5 active:scale-95 transition-transform"
+                  title="Ver fotos capturadas"
+                >
+                  <Camera className="w-3.5 h-3.5 text-sky-400" />
+                  <span>{capturedCheckpoints.length}/7</span>
+                  {capturedCheckpoints.some(cp => cp.stepId === activeStep.id) && (
+                    <span className="text-emerald-400 font-bold ml-0.5">✓</span>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => captureStepSnapshot(currentStepIdx)}
+                  id="btn-mobile-capture-frame"
+                  className={`min-h-[44px] px-4 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-lg active:scale-95 transition-all whitespace-nowrap ${
+                    capturedCheckpoints.some(cp => cp.stepId === activeStep.id)
+                      ? 'bg-emerald-500 text-slate-950 hover:bg-emerald-400'
+                      : 'bg-sky-500 text-slate-950 hover:bg-sky-400'
+                  }`}
+                >
+                  <Camera className="w-4 h-4 shrink-0" />
+                  <span>
+                    {capturedCheckpoints.some(cp => cp.stepId === activeStep.id)
+                      ? `✓ Foto ${activeStep.number} Registrada`
+                      : `Foto Passo ${activeStep.number}`}
+                  </span>
+                </button>
+              </div>
+
+              {/* DESKTOP OVERLAY: Frame capture button */}
+              <div className="hidden md:flex absolute bottom-2 sm:bottom-4 left-2 sm:left-4 z-20 items-center gap-2">
                 <div className="text-[9px] sm:text-[11px] font-mono text-white/90 bg-black/60 px-2 sm:px-2.5 py-1 rounded-lg backdrop-blur-xs hidden xs:block">
                   SHA-256 SYNC
                 </div>
@@ -1145,8 +1349,8 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
               </div>
             </div>
 
-            {/* Instruction, Tips & Step Actions Column */}
-            <div className="lg:col-span-4 flex flex-col justify-between bg-slate-950/80 rounded-2xl border border-slate-800 p-5">
+            {/* DESKTOP RIGHT COLUMN: Instruction, Tips & Step Actions (Requirement 7: hidden on mobile) */}
+            <div className="hidden md:flex md:col-span-4 flex-col justify-between bg-slate-950/80 rounded-2xl border border-slate-800 p-5">
               <div>
                 <span className="text-[11px] font-bold text-sky-400 uppercase tracking-wider block">
                   Etapa {activeStep.number} de 7
@@ -1187,7 +1391,7 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
                 </div>
               </div>
 
-              {/* Navigation controls */}
+              {/* Desktop navigation controls */}
               <div className="mt-6 pt-4 border-t border-slate-800 flex items-center justify-between gap-3">
                 <button
                   type="button"
@@ -1223,6 +1427,138 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
               </div>
             </div>
           </div>
+
+          {/* MOBILE FIXED BOTTOM NAVIGATION BAR (Requirement 10: safe-area aware, always accessible) */}
+          <div className="md:hidden shrink-0 border-t border-slate-800 bg-slate-900/95 backdrop-blur-md px-3 sm:px-4 py-2.5 pb-[calc(0.75rem+env(safe-area-inset-bottom))] flex items-center justify-between gap-2.5 z-30">
+            <button
+              type="button"
+              onClick={handlePrevStep}
+              disabled={currentStepIdx === 0}
+              className="min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-30 disabled:pointer-events-none text-xs font-bold text-slate-300 flex items-center gap-1.5 active:scale-95 transition-all"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Anterior</span>
+            </button>
+
+            {currentStepIdx < RECORDING_STEPS.length - 1 ? (
+              <button
+                type="button"
+                onClick={handleNextStep}
+                id="btn-mobile-next-step"
+                className="min-h-[44px] flex-1 px-4 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-sky-500/25 active:scale-95 transition-all"
+              >
+                <span>Próximo Passo ({currentStepIdx + 2}/7)</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleFinishRecording}
+                id="btn-mobile-finish-dossier"
+                className="min-h-[44px] flex-1 px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/25 active:scale-95 transition-all"
+              >
+                <CheckCircle className="w-4 h-4" />
+                <span>Concluir & Criar Dossiê</span>
+              </button>
+            )}
+          </div>
+
+          {/* MOBILE POPUPS / SHEETS (Requirements 6, 8, 9) */}
+          {showTipSheet && (
+            <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/80 backdrop-blur-xs p-3 md:hidden">
+              <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+                <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-amber-400" />
+                    <h4 className="text-xs font-bold text-white">Dica Anti-Fraude • Passo {activeStep.number}</h4>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowTipSheet(false)}
+                    className="text-slate-400 hover:text-white text-xs p-1"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  {activeStep.tip}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowTipSheet(false)}
+                  className="w-full mt-4 min-h-[44px] py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-white transition-colors"
+                >
+                  Entendido
+                </button>
+              </div>
+            </div>
+          )}
+
+          {showInstructionModal && (
+            <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/80 backdrop-blur-xs p-3 md:hidden">
+              <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-2xl">
+                <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800">
+                  <h4 className="text-xs font-bold text-white">Passo {activeStep.number}: {activeStep.title}</h4>
+                  <button
+                    type="button"
+                    onClick={() => setShowInstructionModal(false)}
+                    className="text-slate-400 hover:text-white text-xs p-1"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  {activeStep.instruction}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowInstructionModal(false)}
+                  className="w-full mt-4 min-h-[44px] py-2.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 text-xs font-bold transition-colors"
+                >
+                  Fechar
+                </button>
+              </div>
+            </div>
+          )}
+
+          {showGalleryModal && (
+            <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/80 backdrop-blur-xs p-3 md:hidden">
+              <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-2xl">
+                <div className="flex items-center justify-between pb-2 mb-3 border-b border-slate-800">
+                  <div className="flex items-center gap-2">
+                    <Camera className="w-4 h-4 text-sky-400" />
+                    <h4 className="text-xs font-bold text-white">Fotos Registradas ({capturedCheckpoints.length}/7)</h4>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowGalleryModal(false)}
+                    className="text-slate-400 hover:text-white text-xs p-1"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2 max-h-56 overflow-y-auto pr-1">
+                  {capturedCheckpoints.map((cp, idx) => (
+                    <div key={idx} className="relative rounded-lg overflow-hidden border border-slate-700 aspect-video bg-black">
+                      <img src={cp.imageDataUrl} alt={cp.stepTitle} className="w-full h-full object-cover" />
+                      <span className="absolute bottom-0.5 right-0.5 px-1 rounded bg-black/80 text-[8px] font-mono text-sky-300">
+                        {cp.formattedTime}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowGalleryModal(false)}
+                  className="w-full mt-4 min-h-[44px] py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-white transition-colors"
+                >
+                  Voltar à Gravação
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

@@ -4,7 +4,7 @@ import {
   AlertTriangle, Search, Lock, ArrowRight, Video, FileText 
 } from 'lucide-react';
 import { Dossier, SellerAccount } from './types';
-import { loadStoredDossiers, loadSellerAccount, saveSellerAccount } from './utils/storage';
+import { loadStoredDossiers, loadSellerAccount, saveSellerAccount, subscribeToDossiers } from './utils/storage';
 import { getShowcaseDossier } from './data/productShowcase';
 import { Navbar } from './components/Navbar';
 import { FraudStatsBanner } from './components/FraudStatsBanner';
@@ -34,10 +34,18 @@ export default function App() {
   const [isLookupOpen, setIsLookupOpen] = useState(false);
   const [lookupInput, setLookupInput] = useState('');
 
+  // Active recording phase tracking for mobile immersive mode & footer hiding
+  const [recordingPhase, setRecordingPhase] = useState<'setup' | 'recording' | 'processing' | 'error'>('setup');
+
   // Initial load & URL check for public verification links
   useEffect(() => {
     const loaded = loadStoredDossiers();
     setDossiers(loaded);
+
+    // Subscribe to async IndexedDB hydration & updates
+    const unsubscribe = subscribeToDossiers((updatedList) => {
+      setDossiers(updatedList);
+    });
 
     // Check if ?verify=PRV-XXXX is in the query params
     const params = new URLSearchParams(window.location.search);
@@ -46,6 +54,10 @@ export default function App() {
       setVerifyTargetId(verifyParam);
       setCurrentView('public_verify');
     }
+
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
   const handleUpdateSeller = (updated: SellerAccount) => {
@@ -82,21 +94,27 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-['Plus_Jakarta_Sans',sans-serif]">
-      {/* Top Navigation */}
-      <Navbar
-        seller={seller}
-        onNewDossier={() => setCurrentView('recording')}
-        onOpenVerify={() => setIsLookupOpen(true)}
-        onOpenPricing={() => setIsPricingOpen(true)}
-        onOpenStats={() => setShowStatsBanner(true)}
-        currentView={currentView}
-        onNavigateHome={() => setCurrentView('landing')}
-        onNavigateLanding={() => setCurrentView('landing')}
-        onNavigateDashboard={() => setCurrentView('dashboard')}
-      />
+      {/* Top Navigation - hidden on mobile during active recording (Requirement 2) */}
+      <div className={currentView === 'recording' && recordingPhase === 'recording' ? 'hidden md:block' : ''}>
+        <Navbar
+          seller={seller}
+          onNewDossier={() => setCurrentView('recording')}
+          onOpenVerify={() => setIsLookupOpen(true)}
+          onOpenPricing={() => setIsPricingOpen(true)}
+          onOpenStats={() => setShowStatsBanner(true)}
+          currentView={currentView}
+          onNavigateHome={() => setCurrentView('landing')}
+          onNavigateLanding={() => setCurrentView('landing')}
+          onNavigateDashboard={() => setCurrentView('dashboard')}
+        />
+      </div>
 
       {/* Main Content Router */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <main className={`flex-1 w-full mx-auto ${
+        currentView === 'recording' && recordingPhase === 'recording'
+          ? 'p-0 md:max-w-7xl md:px-6 lg:px-8 md:py-6'
+          : 'max-w-7xl px-4 sm:px-6 lg:px-8 py-6'
+      }`}>
         {currentView === 'landing' && (
           <LandingPage
             onStartTrial={() => setCurrentView('recording')}
@@ -117,8 +135,15 @@ export default function App() {
         {currentView === 'recording' && (
           <RecordingStudio
             seller={seller}
-            onCancel={() => setCurrentView('dashboard')}
-            onDossierCreated={handleDossierCreated}
+            onCancel={() => {
+              setRecordingPhase('setup');
+              setCurrentView('dashboard');
+            }}
+            onDossierCreated={(dossier) => {
+              setRecordingPhase('setup');
+              handleDossierCreated(dossier);
+            }}
+            onPhaseChange={setRecordingPhase}
           />
         )}
 
@@ -224,19 +249,21 @@ export default function App() {
         )}
       </main>
 
-      {/* Footer */}
-      <footer className="border-t border-slate-900 bg-slate-950 py-6 mt-12 text-center text-xs text-slate-500">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="w-4 h-4 text-sky-500" />
-            <span className="font-semibold text-slate-400">ProvaPack</span>
-            <span>— Prova-como-Serviço para E-commerce</span>
+      {/* Footer - completely hidden during active recording phase (Requirement 12) */}
+      {!(currentView === 'recording' && recordingPhase === 'recording') && (
+        <footer className="border-t border-slate-900 bg-slate-950 py-6 mt-12 text-center text-xs text-slate-500">
+          <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-sky-500" />
+              <span className="font-semibold text-slate-400">ProvaPack</span>
+              <span>— Prova-como-Serviço para E-commerce</span>
+            </div>
+            <div className="text-[11px] text-slate-400">
+              Documentação técnica independente para Mercado Livre, Shopee, Amazon Brasil, Instagram e lojas virtuais.
+            </div>
           </div>
-          <div className="text-[11px] text-slate-400">
-            Documentação técnica independente para Mercado Livre, Shopee, Amazon Brasil, Instagram e lojas virtuais.
-          </div>
-        </div>
-      </footer>
+        </footer>
+      )}
 
       {/* MODALS */}
       {/* 1. Dossier Detail Modal */}
