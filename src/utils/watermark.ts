@@ -19,6 +19,7 @@ export interface VideoProcessingOptions {
   recordingId: string;
   durationSeconds?: number;
   timezoneOffsetFormatted?: string;
+  requiresAudio?: boolean;
   onProgress?: (progressPercent: number, statusText: string) => void;
 }
 
@@ -217,6 +218,8 @@ export async function processVideoWatermark(
       let animationFrameId: number | null = null;
       let intervalTimer: any = null;
       const chunks: Blob[] = [];
+      let audioTracks: MediaStreamTrack[] = [];
+      let audioCtx: AudioContext | null = null;
 
       const cleanup = () => {
         if (animationFrameId) cancelAnimationFrame(animationFrameId);
@@ -227,6 +230,12 @@ export async function processVideoWatermark(
         if (video.parentNode) {
           video.parentNode.removeChild(video);
         }
+        if (audioCtx && audioCtx.state !== 'closed') {
+          try { audioCtx.close(); } catch {}
+        }
+        audioTracks.forEach(t => {
+          try { t.stop(); } catch {}
+        });
       };
 
       video.onerror = () => {
@@ -242,6 +251,47 @@ export async function processVideoWatermark(
           const hasValidDuration = isFinite(video.duration) && !isNaN(video.duration) && video.duration > 0;
           const effectiveDuration = hasValidDuration ? video.duration : Math.max(5, durationSeconds);
 
+          // Audio track preservation logic (P4 Requirement)
+          if (options.requiresAudio) {
+            try {
+              const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+              if (AudioContextClass) {
+                audioCtx = new AudioContextClass();
+                if (audioCtx.state === 'suspended') {
+                  await audioCtx.resume();
+                }
+                video.muted = false;
+                video.volume = 1.0;
+                const source = audioCtx.createMediaElementSource(video);
+                const destination = audioCtx.createMediaStreamDestination();
+                source.connect(destination);
+                // Connect to destination stream without routing to user speakers
+                audioTracks = destination.stream.getAudioTracks();
+              }
+            } catch (audioErr) {
+              console.warn('[Watermark Audio] Extração Web Audio:', audioErr);
+            }
+
+            // Fallback attempt via native captureStream on HTMLVideoElement
+            if (audioTracks.length === 0) {
+              try {
+                const rawStream: any = (video as any).captureStream ? (video as any).captureStream() : (video as any).mozCaptureStream?.();
+                if (rawStream && rawStream.getAudioTracks().length > 0) {
+                  audioTracks = rawStream.getAudioTracks();
+                }
+              } catch (captureErr) {
+                console.warn('[Watermark Audio] Extração captureStream:', captureErr);
+              }
+            }
+
+            // If audio was required by original recording but could not be preserved:
+            if (audioTracks.length === 0) {
+              cleanup();
+              reject(new Error('Não foi possível preservar o áudio na versão ProvaPack. O vídeo original continua disponível.'));
+              return;
+            }
+          }
+
           const canvas = document.createElement('canvas');
           canvas.width = width;
           canvas.height = height;
@@ -254,21 +304,38 @@ export async function processVideoWatermark(
           }
 
           // Use canvas captureStream with 30fps
-          const stream = canvas.captureStream ? canvas.captureStream(30) : (canvas as any).mozCaptureStream?.(30);
-          if (!stream) {
+          const canvasStream = canvas.captureStream ? canvas.captureStream(30) : (canvas as any).mozCaptureStream?.(30);
+          if (!canvasStream) {
             cleanup();
             reject(new Error('Seu navegador não suporta captura de fluxo por canvas (captureStream).'));
             return;
           }
 
-          // Supported MIME types
-          const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
-            ? 'video/webm;codecs=vp9'
-            : MediaRecorder.isTypeSupported('video/webm;codecs=vp8')
-            ? 'video/webm;codecs=vp8'
-            : 'video/webm';
+          // Combine canvas video track with real preserved audio track
+          const combinedStream = new MediaStream();
+          canvasStream.getVideoTracks().forEach((track: MediaStreamTrack) => combinedStream.addTrack(track));
+          audioTracks.forEach((track: MediaStreamTrack) => combinedStream.addTrack(track));
 
-          mediaRecorder = new MediaRecorder(stream, {
+          // Supported MIME types (prioritizing opus audio codec when audio track is present)
+          let mimeType = 'video/webm';
+          if (options.requiresAudio && audioTracks.length > 0) {
+            const audioMimes = [
+              'video/webm;codecs=vp9,opus',
+              'video/webm;codecs=vp8,opus',
+              'video/webm;codecs=h264,opus',
+              'video/webm'
+            ];
+            mimeType = audioMimes.find(m => MediaRecorder.isTypeSupported(m)) || 'video/webm';
+          } else {
+            const videoMimes = [
+              'video/webm;codecs=vp9',
+              'video/webm;codecs=vp8',
+              'video/webm'
+            ];
+            mimeType = videoMimes.find(m => MediaRecorder.isTypeSupported(m)) || 'video/webm';
+          }
+
+          mediaRecorder = new MediaRecorder(combinedStream, {
             mimeType,
             videoBitsPerSecond: 3000000 // 3 Mbps for high crisp fidelity
           });

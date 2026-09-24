@@ -1,6 +1,5 @@
 import express, { Request, Response } from 'express';
 import path from 'path';
-import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
@@ -28,11 +27,11 @@ function getAI(): GoogleGenAI | null {
   return aiClient;
 }
 
-// Lazy Supabase Client
+// Lazy Supabase Client (exclusively uses SUPABASE_SERVICE_ROLE_KEY for server operations)
 let supabaseClient: SupabaseClient | null = null;
 function getSupabase(): SupabaseClient | null {
   const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) return null;
   if (!supabaseClient) {
     supabaseClient = createClient(url, key);
@@ -40,51 +39,8 @@ function getSupabase(): SupabaseClient | null {
   return supabaseClient;
 }
 
-// Local persistent registry for dossiers (persisted across restarts in ./data/registered_dossiers.json)
-const DOSSIERS_DATA_DIR = path.join(__dirname, 'data');
-const DOSSIERS_DATA_FILE = path.join(DOSSIERS_DATA_DIR, 'registered_dossiers.json');
+// Runtime in-memory cache for fast lookup within the running server session
 const registeredDossiers = new Map<string, any>();
-
-function initServerDossiersRegistry() {
-  try {
-    if (fs.existsSync(DOSSIERS_DATA_FILE)) {
-      const raw = fs.readFileSync(DOSSIERS_DATA_FILE, 'utf-8');
-      const items = JSON.parse(raw);
-      if (Array.isArray(items)) {
-        for (const item of items) {
-          if (item.public_id) registeredDossiers.set(item.public_id, item);
-          if (item.recording_id) registeredDossiers.set(item.recording_id, item);
-          if (item.id) registeredDossiers.set(item.id, item);
-        }
-      }
-    }
-  } catch (err) {
-    console.warn('[Server Registry] Não foi possível ler registros salvos do disco:', err);
-  }
-}
-initServerDossiersRegistry();
-
-function persistServerDossier(record: any) {
-  try {
-    if (!fs.existsSync(DOSSIERS_DATA_DIR)) {
-      fs.mkdirSync(DOSSIERS_DATA_DIR, { recursive: true });
-    }
-    let list: any[] = [];
-    if (fs.existsSync(DOSSIERS_DATA_FILE)) {
-      try {
-        list = JSON.parse(fs.readFileSync(DOSSIERS_DATA_FILE, 'utf-8'));
-      } catch {
-        list = [];
-      }
-    }
-    const filtered = list.filter(item => item.public_id !== record.public_id && item.id !== record.id);
-    filtered.unshift(record);
-    // Keep up to 200 records on disk
-    fs.writeFileSync(DOSSIERS_DATA_FILE, JSON.stringify(filtered.slice(0, 200), null, 2), 'utf-8');
-  } catch (err) {
-    console.warn('[Server Registry] Erro ao persistir dossiê no disco:', err);
-  }
-}
 
 // API Routes
 app.get('/api/health', (req: Request, res: Response) => {
@@ -122,7 +78,7 @@ app.get('/api/time', (req: Request, res: Response) => {
   });
 });
 
-// Register or update dossier (Persists to Supabase with in-memory cache)
+// Register or update dossier (Persists to Supabase as official persistence)
 app.post('/api/dossiers', async (req: Request, res: Response) => {
   try {
     const dossier = req.body;
@@ -133,7 +89,7 @@ app.post('/api/dossiers', async (req: Request, res: Response) => {
     const publicId = String(dossier.public_id || dossier.id || '').trim();
     const recordingId = String(dossier.recording_id || dossier.recordingId || publicId).trim();
     const originalSha256 = String(dossier.original_sha256 || dossier.originalSha256 || dossier.fileHashSha256 || '').trim();
-    const processedSha256 = String(dossier.processed_sha256 || dossier.processedSha256 || originalSha256).trim();
+    const processedSha256 = String(dossier.processed_sha256 || dossier.processedSha256 || '').trim();
 
     if (!originalSha256 || originalSha256.length !== 64 || /[^0-9a-fA-F]/.test(originalSha256)) {
       return res.status(400).json({ success: false, error: 'Hash SHA-256 original inválido.' });
@@ -141,6 +97,14 @@ app.post('/api/dossiers', async (req: Request, res: Response) => {
 
     if (!processedSha256 || processedSha256.length !== 64 || /[^0-9a-fA-F]/.test(processedSha256)) {
       return res.status(400).json({ success: false, error: 'Hash SHA-256 processado inválido.' });
+    }
+
+    const supabase = getSupabase();
+    if (!supabase) {
+      return res.status(503).json({
+        success: false,
+        error: 'Registro online temporariamente indisponível'
+      });
     }
 
     // Normalized record for Supabase (NO sensitive customer personal data like buyer CPF, card, address)
@@ -164,41 +128,29 @@ app.post('/api/dossiers', async (req: Request, res: Response) => {
       status: dossier.status || 'validado'
     };
 
-    // Store in memory cache & disk persistence
+    const { error: dbError } = await supabase
+      .from('provapacks')
+      .upsert(payload, { onConflict: 'public_id' });
+
+    if (dbError) {
+      console.error('[Supabase Erro] Falha ao persistir no Supabase:', dbError);
+      return res.status(500).json({
+        success: false,
+        error: 'Registro online temporariamente indisponível'
+      });
+    }
+
+    // Runtime in-memory cache for fast read within active process
     const savedRecord = { ...dossier, ...payload };
     registeredDossiers.set(publicId, savedRecord);
     if (recordingId && recordingId !== publicId) {
       registeredDossiers.set(recordingId, savedRecord);
     }
-    persistServerDossier(savedRecord);
-
-    // Persist to Supabase if configured (resilient against missing table or network failures)
-    let persistedToSupabase = false;
-    let supabaseNotice: string | null = null;
-    const supabase = getSupabase();
-    if (supabase) {
-      try {
-        const { error: dbError } = await supabase
-          .from('provapacks')
-          .upsert(payload, { onConflict: 'public_id' });
-
-        if (dbError) {
-          console.warn('[Supabase Aviso] Falha ao persistir provapack no Supabase (verifique se a tabela provapacks foi criada):', dbError.message || dbError);
-          supabaseNotice = dbError.message || 'Tabela pendente no Supabase';
-        } else {
-          persistedToSupabase = true;
-        }
-      } catch (err: any) {
-        console.warn('[Supabase Aviso] Exceção de conexão com Supabase:', err?.message || err);
-        supabaseNotice = err?.message || 'Erro de conexão Supabase';
-      }
-    }
 
     return res.json({ 
       success: true, 
       dossierId: publicId,
-      persistedToSupabase,
-      warning: supabaseNotice ? `Dossiê registrado localmente com sucesso. Supabase: ${supabaseNotice}` : undefined
+      persistedToSupabase: true
     });
   } catch (err: any) {
     console.error('Erro ao salvar dossiê:', err);

@@ -39,6 +39,7 @@ export interface EvidenceRecording {
   timeDivergenceMs?: number;
   timeDivergenceNote?: string;
   errorMessage?: string;
+  onlinePersisted?: boolean;
 }
 
 export interface CheckpointFrame {
@@ -83,6 +84,7 @@ export interface Dossier {
   timeSource?: TimeSource;
   timezone?: string;
   timezoneOffsetFormatted?: string;
+  onlinePersisted?: boolean;
 }
 
 export interface RecordingStepDef {

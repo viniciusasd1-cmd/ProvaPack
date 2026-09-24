@@ -224,16 +224,16 @@ export async function generateDossierPDF(dossier: Dossier): Promise<void> {
 
   currentY += 23;
 
-  // Checkpoint Snapshots Section (Page 1 summary + photos grid)
+  // Checkpoint Snapshots Section (Real captured checkpoints only)
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11);
   doc.setTextColor(15, 23, 42);
-  doc.text('3. ROTEIRO DE GRAVAÇÃO CONTÍNUA & QUADROS EXTRAÍDOS', margin, currentY);
+  const checkpoints = (dossier.checkpoints || []).filter(cp => cp.imageDataUrl && cp.imageDataUrl.startsWith('data:image'));
+  doc.text(`3. ROTEIRO DE GRAVAÇÃO CONTÍNUA & QUADROS EXTRAÍDOS (${checkpoints.length}/7)`, margin, currentY);
 
   currentY += 4;
 
-  // Checkpoints grid: 7 steps
-  const checkpoints = dossier.checkpoints || [];
+  // Checkpoints grid
   const cardWidth = (pageWidth - (margin * 2) - 8) / 3;
   const cardHeight = 36;
 
@@ -268,21 +268,13 @@ export async function generateDossierPDF(dossier: Dossier): Promise<void> {
     doc.setTextColor(56, 189, 248);
     doc.text(cp.formattedTime || '00:00', x + cardWidth - 10, y + 4.2);
 
-    // If image data exists, render it; otherwise render placeholder
-    if (cp.imageDataUrl && cp.imageDataUrl.startsWith('data:image')) {
-      try {
-        doc.addImage(cp.imageDataUrl, 'JPEG', x + 1, y + 7, cardWidth - 2, cardHeight - 8);
-      } catch {
-        doc.setTextColor(148, 163, 184);
-        doc.setFontSize(7);
-        doc.text('[Quadro extraído do vídeo]', x + 4, y + 18);
-      }
-    } else {
+    // Render real captured image
+    try {
+      doc.addImage(cp.imageDataUrl, 'JPEG', x + 1, y + 7, cardWidth - 2, cardHeight - 8);
+    } catch {
       doc.setTextColor(148, 163, 184);
-      doc.setFont('helvetica', 'italic');
-      doc.setFontSize(6.5);
-      doc.text('[Evidência registrada no vídeo contínuo]', x + 3, y + 18);
-      doc.text(`Hash vinculado ao timestamp`, x + 3, y + 23);
+      doc.setFontSize(7);
+      doc.text('[Quadro extraído do vídeo]', x + 4, y + 18);
     }
 
     col++;

@@ -41,6 +41,10 @@ export const DossierDetailModal: React.FC<DossierDetailModalProps> = ({
   };
 
   const handleCopyLink = () => {
+    if (dossier.onlinePersisted === false) {
+      alert('O registro online deste dossiê ainda não foi confirmado no banco Supabase. O link público de verificação só estará ativo após a confirmação no servidor.');
+      return;
+    }
     const url = `${window.location.origin}?verify=${dossier.id}`;
     navigator.clipboard.writeText(url);
     setCopiedLink(true);
@@ -328,7 +332,7 @@ export const DossierDetailModal: React.FC<DossierDetailModalProps> = ({
             </span>
             <span className="inline-flex items-center gap-1.5 text-sky-400 font-medium">
               <Check className="w-3.5 h-3.5 shrink-0" />
-              <span>7/7 marcos registrados</span>
+              <span>{dossier.checkpoints?.length || 0}/7 marcos registrados</span>
             </span>
           </div>
 

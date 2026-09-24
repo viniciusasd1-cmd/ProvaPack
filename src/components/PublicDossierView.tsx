@@ -2,12 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { 
   ShieldCheck, Search, Hash, Clock, CheckCircle2, FileText, 
   ArrowLeft, ExternalLink, Video, Lock, Download,
-  Maximize2, X, Check, ChevronDown, ChevronUp, Copy, Eye
+  Maximize2, X, Check, ChevronDown, ChevronUp, Copy, Eye,
+  ShieldAlert, Loader2
 } from 'lucide-react';
 import { Dossier, CheckpointFrame } from '../types';
 import { generateDossierPDF } from '../utils/pdfGenerator';
 import { formatBytes } from '../utils/crypto';
-import { getShowcaseDossier } from '../data/productShowcase';
 import { getVideoBlobs } from '../utils/watermark';
 
 interface PublicDossierViewProps {
@@ -27,40 +27,126 @@ export const PublicDossierView: React.FC<PublicDossierViewProps> = ({
   const [showTechDetails, setShowTechDetails] = useState(false);
   const [showFullTerms, setShowFullTerms] = useState(false);
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [notFoundError, setNotFoundError] = useState<string | null>(null);
 
   const [selectedDossier, setSelectedDossier] = useState<Dossier | null>(() => {
     if (initialDossierId) {
-      return dossiers.find(d => d.id === initialDossierId) || getShowcaseDossier(initialDossierId) || dossiers[0] || null;
+      return dossiers.find(d => 
+        d.id.toLowerCase() === initialDossierId.toLowerCase() ||
+        d.recordingId?.toLowerCase() === initialDossierId.toLowerCase()
+      ) || null;
     }
     return dossiers[0] || null;
   });
 
+  const fetchDossierFromApi = async (id: string): Promise<Dossier | null> => {
+    try {
+      const res = await fetch(`/api/dossiers/${encodeURIComponent(id)}`);
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (!data.success || !data.dossier) return null;
+      const d = data.dossier;
+
+      // Check if user has local matching blob data
+      const localMatch = dossiers.find(loc => loc.id === (d.public_id || d.id) || loc.recordingId === (d.recording_id || d.recordingId));
+
+      return {
+        id: d.public_id || d.id,
+        recordingId: d.recording_id || d.recordingId,
+        marketplace: d.marketplace,
+        orderNumber: d.order_number || d.orderNumber,
+        trackingCode: d.tracking_code || d.trackingCode,
+        productName: d.product_name || d.productName,
+        serialNumber: d.serial_number || d.serialNumber,
+        accessories: localMatch?.accessories || 'Conferidos na gravação contínua',
+        packageType: localMatch?.packageType || 'Caixa lacrada com proteção',
+        sellerName: localMatch?.sellerName || 'Expedidor ProvaPack',
+        recordedAt: d.recorded_at || d.recordedAt,
+        formattedDate: d.recorded_at ? new Date(d.recorded_at).toLocaleString('pt-BR') : '',
+        durationSeconds: d.duration_seconds || d.durationSeconds || 0,
+        fileHashSha256: d.processed_sha256 || d.fileHashSha256 || '',
+        originalSha256: d.original_sha256 || d.originalSha256,
+        processedSha256: d.processed_sha256 || d.processedSha256,
+        fileSizeBytes: d.file_size_bytes || d.fileSizeBytes || 0,
+        videoBlobUrl: localMatch?.videoBlobUrl,
+        originalVideoBlobUrl: localMatch?.originalVideoBlobUrl,
+        processedVideoBlobUrl: localMatch?.processedVideoBlobUrl,
+        videoMimeType: localMatch?.videoMimeType || 'video/webm',
+        checkpoints: localMatch?.checkpoints || d.checkpoints || [],
+        status: d.status || 'validado',
+        verificationStatus: 'Registro oficial Supabase',
+        timeSource: d.time_source || 'DEVICE_WITH_SERVER_REFERENCE',
+        timezone: d.timezone || 'America/Sao_Paulo',
+        onlinePersisted: true
+      };
+    } catch {
+      return null;
+    }
+  };
+
   useEffect(() => {
     if (initialDossierId) {
-      const found = dossiers.find(d => d.id === initialDossierId) || getShowcaseDossier(initialDossierId);
-      if (found) {
-        setSelectedDossier(found);
-        setSearchQuery(initialDossierId);
+      setSearchQuery(initialDossierId);
+      const localFound = dossiers.find(d => 
+        d.id.toLowerCase() === initialDossierId.toLowerCase() ||
+        d.recordingId?.toLowerCase() === initialDossierId.toLowerCase()
+      );
+      if (localFound) {
+        setSelectedDossier(localFound);
+        setNotFoundError(null);
+        return;
       }
+
+      setIsLoading(true);
+      fetchDossierFromApi(initialDossierId).then((apiDossier) => {
+        setIsLoading(false);
+        if (apiDossier) {
+          setSelectedDossier(apiDossier);
+          setNotFoundError(null);
+        } else {
+          setSelectedDossier(null);
+          setNotFoundError(`Registro não encontrado para "${initialDossierId}".`);
+        }
+      });
+    } else if (dossiers.length > 0) {
+      setSelectedDossier(dossiers[0]);
+      setNotFoundError(null);
+    } else {
+      setSelectedDossier(null);
     }
   }, [initialDossierId, dossiers]);
 
-  const handleSearch = (e: React.FormEvent) => {
+  const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
-    const query = searchQuery.trim().toUpperCase();
+    const query = searchQuery.trim();
     if (!query) return;
 
-    const found = dossiers.find(d => 
-      d.id.toUpperCase() === query || 
-      d.orderNumber.toUpperCase() === query ||
-      (d.trackingCode && d.trackingCode.toUpperCase() === query) ||
-      d.fileHashSha256.toUpperCase() === query
-    ) || getShowcaseDossier(query);
+    setIsLoading(true);
+    setNotFoundError(null);
 
-    if (found) {
-      setSelectedDossier(found);
+    const localFound = dossiers.find(d => 
+      d.id.toUpperCase() === query.toUpperCase() || 
+      d.orderNumber.toUpperCase() === query.toUpperCase() ||
+      (d.trackingCode && d.trackingCode.toUpperCase() === query.toUpperCase()) ||
+      d.fileHashSha256.toUpperCase() === query.toUpperCase() ||
+      (d.recordingId && d.recordingId.toUpperCase() === query.toUpperCase())
+    );
+
+    if (localFound) {
+      setSelectedDossier(localFound);
+      setIsLoading(false);
+      return;
+    }
+
+    const apiDossier = await fetchDossierFromApi(query);
+    setIsLoading(false);
+    if (apiDossier) {
+      setSelectedDossier(apiDossier);
+      setNotFoundError(null);
     } else {
-      alert(`Nenhum dossiê encontrado para o identificador "${query}".`);
+      setSelectedDossier(null);
+      setNotFoundError(`Registro não encontrado para "${query}".`);
     }
   };
 
@@ -340,7 +426,7 @@ export const PublicDossierView: React.FC<PublicDossierViewProps> = ({
                 </span>
                 <span className="inline-flex items-center gap-1.5 text-sky-400 font-medium">
                   <Check className="w-3.5 h-3.5 shrink-0" />
-                  <span>7/7 marcos registrados</span>
+                  <span>{selectedDossier.checkpoints?.length || 0}/7 marcos registrados</span>
                 </span>
               </div>
 
@@ -543,6 +629,30 @@ export const PublicDossierView: React.FC<PublicDossierViewProps> = ({
                 </div>
               </div>
             )}
+          </div>
+        ) : isLoading ? (
+          <div className="text-center py-20 text-slate-400 bg-slate-900/60 rounded-3xl border border-slate-800 p-8 flex flex-col items-center justify-center">
+            <Loader2 className="w-8 h-8 text-sky-400 animate-spin mb-3" />
+            <span className="text-sm font-semibold text-slate-200">Consultando registro oficial no Supabase...</span>
+          </div>
+        ) : notFoundError ? (
+          <div className="text-center py-16 bg-slate-900 border border-slate-800 rounded-3xl p-8 max-w-lg mx-auto shadow-2xl">
+            <div className="w-14 h-14 rounded-2xl bg-red-500/10 text-red-400 flex items-center justify-center mx-auto mb-4 border border-red-500/20">
+              <ShieldAlert className="w-7 h-7" />
+            </div>
+            <h3 className="text-lg font-bold text-white mb-1.5">Registro Não Encontrado (404)</h3>
+            <p className="text-xs text-slate-400 mb-6">
+              {notFoundError}
+            </p>
+            <div className="text-[11px] text-slate-500 bg-slate-950 p-3 rounded-xl border border-slate-800/80 mb-5">
+              Nenhum dado técnico foi gerado ou cadastrado para este identificador.
+            </div>
+            <button
+              onClick={() => { setNotFoundError(null); setSearchQuery(''); }}
+              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold"
+            >
+              Fazer nova busca
+            </button>
           </div>
         ) : (
           <div className="text-center py-16 text-slate-400 bg-slate-900/50 rounded-3xl border border-slate-800 p-8">

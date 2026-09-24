@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { 
   Camera, Video, StopCircle, CheckCircle, ArrowRight, ArrowLeft, 
   RotateCw, AlertTriangle, ShieldCheck, Sparkles, Hash, Scan, 
-  Layers, Package, Check, HelpCircle, RefreshCw, ShieldAlert, X
+  Layers, Package, Check, HelpCircle, RefreshCw, ShieldAlert, X, Download
 } from 'lucide-react';
 import { Marketplace, Dossier, CheckpointFrame, SellerAccount, EvidenceRecording, ProcessingStatus, TimeSource } from '../types';
 import { RECORDING_STEPS } from '../data/steps';
@@ -84,6 +84,8 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
   const [capturedCheckpoints, setCapturedCheckpoints] = useState<CheckpointFrame[]>([]);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [processingStatus, setProcessingStatus] = useState('Processando gravação ininterrupta...');
+  const [discreteNotice, setDiscreteNotice] = useState<string | null>(null);
+  const recordingHasAudioRef = useRef<boolean>(false);
 
   // Forensic Watermark and Temporal Metadata
   const [recordingId, setRecordingId] = useState<string>(() => generateRecordingId());
@@ -282,8 +284,13 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
         body: JSON.stringify({ imageBase64: frameBase64 })
       });
 
+      if (!res.ok) {
+        setOcrMessage('Não foi possível identificar automaticamente os dados da etiqueta. Preencha ou confirme manualmente.');
+        return;
+      }
+
       const json = await res.json();
-      if (json.data) {
+      if (json.success && json.data) {
         if (json.data.orderNumber) setOrderNumber(json.data.orderNumber);
         if (json.data.trackingCode) setTrackingCode(json.data.trackingCode);
         if (json.data.serialNumber) setSerialNumber(json.data.serialNumber);
@@ -296,11 +303,10 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
         }
         setOcrMessage(json.message || 'Dados lidos com sucesso da etiqueta/produto!');
       } else {
-        setOcrMessage('Leitura concluída. Confira os campos preenchidos.');
+        setOcrMessage('Não foi possível identificar automaticamente os dados da etiqueta. Preencha ou confirme manualmente.');
       }
     } catch {
-      setOcrMessage('Processamento da etiqueta realizado. Preencha ou confirme os campos.');
-      if (!orderNumber) setOrderNumber('MLB-' + Math.floor(100000000 + Math.random() * 900000000));
+      setOcrMessage('Não foi possível identificar automaticamente os dados da etiqueta. Preencha ou confirme manualmente.');
     } finally {
       setIsScanningLabel(false);
       setTimeout(() => setOcrMessage(null), 4000);
@@ -371,6 +377,10 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
           await startCamera(true);
         }
 
+        // P4: Detect if live audio track is present in active media stream
+        const hasLiveAudio = mediaStreamRef.current ? mediaStreamRef.current.getAudioTracks().some(t => t.readyState === 'live') : false;
+        recordingHasAudioRef.current = hasLiveAudio;
+
         const chosenMime = getSupportedVideoMimeType();
         let recorder: MediaRecorder | null = null;
 
@@ -435,6 +445,14 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
     if (!step) return;
 
     const frameUrl = grabCurrentFrame(stepIndex);
+    if (!frameUrl || frameUrl.length < 100 || !frameUrl.startsWith('data:image')) {
+      setDiscreteNotice('Não foi possível registrar a imagem deste passo.');
+      setTimeout(() => {
+        setDiscreteNotice(prev => (prev === 'Não foi possível registrar a imagem deste passo.' ? null : prev));
+      }, 3500);
+      return;
+    }
+
     const newCheckpoint: CheckpointFrame = {
       stepId: step.id,
       stepTitle: `${step.number}. ${step.title}`,
@@ -552,6 +570,7 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
         recordingId,
         durationSeconds: recordingSeconds,
         timezoneOffsetFormatted,
+        requiresAudio: recordingHasAudioRef.current,
         onProgress: (pct, msg) => {
           setProcessingPct(Math.round(50 + pct * 0.45));
           setProcessingStatus(msg);
@@ -564,7 +583,7 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
     } catch (watermarkErr: any) {
       console.warn('Falha no processamento da marca d\'água:', watermarkErr);
       setProcessingStage('FAILED');
-      setProcessingError('O vídeo original foi preservado, mas a versão ProvaPack não pôde ser gerada.');
+      setProcessingError(watermarkErr?.message || 'O vídeo original foi preservado, mas a versão ProvaPack com marca d\'água não foi gerada.');
       return;
     }
 
@@ -572,7 +591,7 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
     setProcessingPct(100);
     setProcessingStatus('Registro técnico ProvaPack gerado com sucesso.');
 
-    finalizeDossier(recordedBlob, originalHash, processedBlob, processedHash, lastStep, lastFrame);
+    await finalizeDossier(recordedBlob, originalHash, processedBlob, processedHash);
   };
 
   const handleRetryWatermark = async () => {
@@ -582,15 +601,13 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
     setProcessingStatus('Tentando gerar versão ProvaPack com marca d\'água novamente...');
     setProcessingError(null);
 
-    const lastStep = RECORDING_STEPS[currentStepIdx] || RECORDING_STEPS[RECORDING_STEPS.length - 1];
-    const lastFrame = grabCurrentFrame(currentStepIdx);
-
     try {
       const processedBlob = await processVideoWatermark(originalBlobHolder, {
         startedAtTimestamp: startedAtTimestamp || Date.now(),
         recordingId,
         durationSeconds: recordingSeconds,
         timezoneOffsetFormatted,
+        requiresAudio: recordingHasAudioRef.current,
         onProgress: (pct, msg) => {
           setProcessingPct(Math.round(50 + pct * 0.45));
           setProcessingStatus(msg);
@@ -602,57 +619,35 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
       setProcessingPct(100);
       setProcessingStage('READY');
       setProcessingStatus('Registro técnico ProvaPack gerado com sucesso.');
-      finalizeDossier(originalBlobHolder, originalSha256Holder, processedBlob, processedHash, lastStep, lastFrame);
-    } catch {
+      await finalizeDossier(originalBlobHolder, originalSha256Holder, processedBlob, processedHash);
+    } catch (watermarkErr: any) {
       setProcessingStage('FAILED');
-      setProcessingError('O vídeo original foi preservado, mas a versão ProvaPack não pôde ser gerada.');
+      setProcessingError(watermarkErr?.message || 'O vídeo original foi preservado, mas a versão ProvaPack com marca d\'água não foi gerada.');
     }
   };
 
-  const handleSaveOriginalOnly = () => {
-    if (!originalBlobHolder || !originalSha256Holder) return;
-    const lastStep = RECORDING_STEPS[currentStepIdx] || RECORDING_STEPS[RECORDING_STEPS.length - 1];
-    const lastFrame = grabCurrentFrame(currentStepIdx);
-    finalizeDossier(originalBlobHolder, originalSha256Holder, originalBlobHolder, originalSha256Holder, lastStep, lastFrame);
+  const handleDownloadOriginalOnly = () => {
+    if (!originalBlobHolder) return;
+    const url = URL.createObjectURL(originalBlobHolder);
+    const a = document.createElement('a');
+    a.href = url;
+    const ext = originalBlobHolder.type.includes('mp4') ? 'mp4' : 'webm';
+    const slug = (orderNumber || recordingId || 'gravacao').replace(/[^a-zA-Z0-9_-]/g, '_');
+    a.download = `ORIGINAL_${slug}.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
-  const finalizeDossier = (
+  const finalizeDossier = async (
     originalBlob: Blob,
     originalHash: string,
     processedBlob: Blob,
-    processedHash: string,
-    lastStep: any,
-    lastFrame: string
+    processedHash: string
   ) => {
-    let finalCheckpoints = [...capturedCheckpoints];
-    const lastExistingIdx = finalCheckpoints.findIndex(cp => cp.stepId === lastStep.id);
-    const lastCp: CheckpointFrame = {
-      stepId: lastStep.id,
-      stepTitle: `${lastStep.number}. ${lastStep.title}`,
-      timestampSeconds: recordingSeconds,
-      formattedTime: formatSecondsToTime(recordingSeconds),
-      imageDataUrl: lastFrame
-    };
-    if (lastExistingIdx >= 0) {
-      finalCheckpoints[lastExistingIdx] = lastCp;
-    } else {
-      finalCheckpoints.push(lastCp);
-    }
-
-    RECORDING_STEPS.forEach((step, idx) => {
-      const exists = finalCheckpoints.some(cp => cp.stepId === step.id);
-      if (!exists) {
-        finalCheckpoints.push({
-          stepId: step.id,
-          stepTitle: `${step.number}. ${step.title}`,
-          timestampSeconds: Math.min(recordingSeconds, idx * 8 + 4),
-          formattedTime: formatSecondsToTime(Math.min(recordingSeconds, idx * 8 + 4)),
-          imageDataUrl: grabCurrentFrame(idx)
-        });
-      }
-    });
-
-    finalCheckpoints.sort((a, b) => a.timestampSeconds - b.timestampSeconds);
+    // Only real checkpoints effectively captured during recording
+    const finalCheckpoints = [...capturedCheckpoints].sort((a, b) => a.timestampSeconds - b.timestampSeconds);
 
     const dossierId = generateDossierId();
     const nowIso = new Date().toISOString();
@@ -719,32 +714,66 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
     // Save locally
     saveDossierToStorage(newDossier);
 
-    // Send to server registry
+    // Send to backend and check Supabase persistence status
+    let isPersistedOnline = false;
+    let onlineNotice = '';
+
     try {
-      fetch('/api/dossiers', {
+      setProcessingStatus('Registrando metadados no Supabase...');
+      const serverRes = await fetch('/api/dossiers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           id: newDossier.id,
-          recordingId: newDossier.recordingId,
+          public_id: newDossier.id,
+          recording_id: newDossier.recordingId,
           marketplace: newDossier.marketplace,
-          orderNumber: newDossier.orderNumber,
-          trackingCode: newDossier.trackingCode,
-          productName: newDossier.productName,
-          serialNumber: newDossier.serialNumber,
-          recordedAt: newDossier.recordedAt,
-          durationSeconds: newDossier.durationSeconds,
-          fileHashSha256: newDossier.fileHashSha256,
-          originalSha256: newDossier.originalSha256,
-          processedSha256: newDossier.processedSha256,
-          fileSizeBytes: newDossier.fileSizeBytes,
+          order_number: newDossier.orderNumber,
+          tracking_code: newDossier.trackingCode,
+          product_name: newDossier.productName,
+          serial_number: newDossier.serialNumber,
+          recorded_at: newDossier.recordedAt,
+          duration_seconds: newDossier.durationSeconds,
+          original_sha256: newDossier.originalSha256,
+          processed_sha256: newDossier.processedSha256,
+          file_size_bytes: newDossier.fileSizeBytes,
           status: newDossier.status,
-          timeSource: newDossier.timeSource,
+          time_source: newDossier.timeSource,
           timezone: newDossier.timezone
         })
-      }).catch(() => {});
-    } catch {}
+      });
 
+      if (serverRes.ok) {
+        const json = await serverRes.json();
+        if (json.success && json.persistedToSupabase) {
+          isPersistedOnline = true;
+          onlineNotice = 'Registro online confirmado';
+        } else {
+          isPersistedOnline = false;
+          onlineNotice = 'Seus arquivos foram gerados, mas o registro online não foi confirmado.';
+        }
+      } else {
+        isPersistedOnline = false;
+        onlineNotice = 'Seus arquivos foram gerados, mas o registro online não foi confirmado.';
+      }
+    } catch (netErr) {
+      console.warn('Erro ao conectar com servidor para registro online:', netErr);
+      isPersistedOnline = false;
+      onlineNotice = 'Seus arquivos foram gerados, mas o registro online não foi confirmado.';
+    }
+
+    newDossier.onlinePersisted = isPersistedOnline;
+    if (newDossier.evidenceRecording) {
+      newDossier.evidenceRecording.onlinePersisted = isPersistedOnline;
+    }
+    newDossier.verificationStatus = isPersistedOnline 
+      ? 'Registro online confirmado' 
+      : 'Registro local (Online pendente)';
+
+    // Update storage with final online confirmation status
+    saveDossierToStorage(newDossier);
+
+    setProcessingStatus(onlineNotice);
     setTimeout(() => {
       onDossierCreated(newDossier);
     }, 1200);
@@ -1236,6 +1265,15 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
                 </button>
               </div>
 
+              {/* Discrete Notice Banner (P2 requirement) */}
+              {discreteNotice && (
+                <div className="absolute top-16 left-4 right-4 z-30 flex justify-center pointer-events-none">
+                  <div className="bg-amber-950/95 border border-amber-500/80 text-amber-200 text-xs px-3.5 py-1.5 rounded-lg shadow-xl backdrop-blur-sm font-medium animate-pulse text-center">
+                    {discreteNotice}
+                  </div>
+                </div>
+              )}
+
               {/* MOBILE OVERLAY: Active Step Guidance Pin on Video (Requirement 6 & 8) */}
               <div className="md:hidden absolute top-11 left-2.5 right-2.5 z-20">
                 <div className="bg-slate-950/85 backdrop-blur-md border border-slate-700/80 rounded-xl p-2.5 shadow-xl">
@@ -1644,10 +1682,10 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
             <div className="mt-5 p-4 rounded-xl bg-amber-950/40 border border-amber-800/80 text-left">
               <div className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
                 <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
-                <span>O vídeo original foi preservado, mas a versão ProvaPack não pôde ser gerada.</span>
+                <span>O vídeo original foi preservado, mas a versão ProvaPack com marca d'água não foi gerada.</span>
               </div>
               <p className="text-[11px] text-slate-300 mt-1.5">
-                O arquivo gravado e o cálculo SHA-256 do original estão seguros. Você pode tentar reprocessar a marca d'água ou salvar imediatamente o dossiê apenas com o vídeo original.
+                {processingError || "O arquivo de vídeo original e o cálculo criptográfico SHA-256 estão preservados."}
               </p>
               <div className="mt-4 flex flex-wrap gap-2">
                 <button
@@ -1656,14 +1694,15 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
                   className="px-3 py-1.5 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs flex items-center gap-1"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
-                  <span>Tentar novamente</span>
+                  <span>Tentar processamento novamente</span>
                 </button>
                 <button
                   type="button"
-                  onClick={handleSaveOriginalOnly}
+                  onClick={handleDownloadOriginalOnly}
                   className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs flex items-center gap-1"
                 >
-                  <span>Salvar apenas original</span>
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Baixar vídeo original</span>
                 </button>
               </div>
             </div>

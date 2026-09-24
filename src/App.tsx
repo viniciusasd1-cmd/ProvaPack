@@ -47,12 +47,18 @@ export default function App() {
       setDossiers(updatedList);
     });
 
-    // Check if ?verify=PRV-XXXX is in the query params
+    // Check if ?verify=PRV-XXXX or #public-PRV-XXXX is in the URL
     const params = new URLSearchParams(window.location.search);
     const verifyParam = params.get('verify');
     if (verifyParam) {
       setVerifyTargetId(verifyParam);
       setCurrentView('public_verify');
+    } else if (window.location.hash.startsWith('#public-')) {
+      const hashId = window.location.hash.replace('#public-', '').trim();
+      if (hashId) {
+        setVerifyTargetId(hashId);
+        setCurrentView('public_verify');
+      }
     }
 
     return () => {
@@ -82,13 +88,14 @@ export default function App() {
       d.id.toUpperCase() === query || 
       d.orderNumber.toUpperCase() === query ||
       d.fileHashSha256.toUpperCase() === query
-    ) || getShowcaseDossier(query);
+    );
 
+    setIsLookupOpen(false);
     if (found) {
-      setIsLookupOpen(false);
       setSelectedDossier(found);
     } else {
-      alert(`Dossiê "${query}" não encontrado na base local.`);
+      setVerifyTargetId(query);
+      setCurrentView('public_verify');
     }
   };
 
