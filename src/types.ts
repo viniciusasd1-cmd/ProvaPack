@@ -103,8 +103,9 @@ export interface SellerAccount {
   sellerName: string;
   storeName: string;
   plan: 'Gratuito (10 envios)' | 'Pro (50 envios)' | 'Alto Volume (Ilimitado)';
-  freeDossiersRemaining: number;
+  freeDossiersRemaining: number | null;
   monthlyLimit: number;
   usedThisMonth: number;
   extraCredits: number;
+  unlimited?: boolean;
 }

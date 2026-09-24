@@ -54,7 +54,8 @@ export default function App() {
         freeDossiersRemaining: profile.freeDossiersRemaining,
         monthlyLimit: profile.monthlyLimit,
         usedThisMonth: profile.usedThisMonth,
-        extraCredits: profile.extraCredits
+        extraCredits: profile.extraCredits,
+        unlimited: profile.unlimited
       }));
     }
   }, [profile]);
@@ -268,7 +269,9 @@ export default function App() {
 
               <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800">
                 <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">Envios Disponíveis</span>
-                <span className="text-2xl font-black text-sky-400 mt-1 block">{seller.freeDossiersRemaining}</span>
+                <span className="text-2xl font-black text-sky-400 mt-1 block">
+                  {seller.unlimited ? 'Ilimitado' : (seller.freeDossiersRemaining ?? 0)}
+                </span>
                 <span className="text-[10px] text-slate-400 mt-0.5 block">{seller.plan}</span>
               </div>
 

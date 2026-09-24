@@ -11,7 +11,7 @@ export interface UserAccount {
   monthlyLimit: number | null;
   monthlyUsed: number;
   extraCredits: number;
-  remaining: number;
+  remaining: number | null;
   unlimited: boolean;
   currentPeriodStart: string | null;
   currentPeriodEnd: string | null;
@@ -22,10 +22,11 @@ export interface VisualSellerProfile {
   userId: string;
   email: string;
   plan: 'Gratuito (10 envios)' | 'Pro (50 envios)' | 'Alto Volume (Ilimitado)';
-  freeDossiersRemaining: number;
+  freeDossiersRemaining: number | null;
   monthlyLimit: number;
   usedThisMonth: number;
   extraCredits: number;
+  unlimited: boolean;
 }
 
 function mapAccountToVisualProfile(userId: string, email: string, account: UserAccount): VisualSellerProfile {
@@ -37,10 +38,11 @@ function mapAccountToVisualProfile(userId: string, email: string, account: UserA
     userId,
     email,
     plan: visualPlan,
-    freeDossiersRemaining: account.remaining,
+    freeDossiersRemaining: account.unlimited ? null : account.remaining,
     monthlyLimit: account.monthlyLimit ?? 10,
     usedThisMonth: account.monthlyUsed,
-    extraCredits: account.extraCredits
+    extraCredits: account.extraCredits,
+    unlimited: account.unlimited
   };
 }
 

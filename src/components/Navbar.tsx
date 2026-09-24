@@ -28,6 +28,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 }) => {
   const { user, isAuthenticated, profile, signOut } = useAuth();
 
+  const isUnlimited = Boolean(profile?.unlimited ?? seller.unlimited);
   const effectiveRemaining = profile?.freeDossiersRemaining ?? seller.freeDossiersRemaining;
   const effectivePlan = profile?.plan ?? seller.plan;
 
@@ -81,10 +82,12 @@ export const Navbar: React.FC<NavbarProps> = ({
             <CreditCard className="w-3.5 h-3.5 text-sky-400 shrink-0" />
             <div className="text-left">
               <span className="block font-medium leading-none text-[11px] sm:text-xs">
-                {effectiveRemaining > 0 
-                  ? `${effectiveRemaining}/10` 
-                  : `${effectivePlan}`}
-                <span className="hidden sm:inline">{effectiveRemaining > 0 ? ' Grátis' : ''}</span>
+                {isUnlimited
+                  ? 'Ilimitado'
+                  : effectiveRemaining !== null && effectiveRemaining > 0
+                    ? `${effectiveRemaining}/10`
+                    : effectivePlan}
+                <span className="hidden sm:inline">{!isUnlimited && effectiveRemaining !== null && effectiveRemaining > 0 ? ' Grátis' : ''}</span>
               </span>
             </div>
             <span className="text-[10px] text-sky-400 font-semibold underline ml-0.5 sm:ml-1 hidden sm:inline">Planos</span>

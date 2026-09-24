@@ -131,8 +131,8 @@ app.get('/api/health', (req: Request, res: Response) => {
   res.json({ status: 'ok', service: 'ProvaPack API', timestamp: new Date().toISOString() });
 });
 
-// P11 — GET /api/account/me
-// Consulta autoritativa no banco de dados Supabase/PostgreSQL
+// P11 & MVP-02A.2 — GET /api/account/me
+// Consulta autoritativa no banco de dados Supabase/PostgreSQL exclusivamente via RPC get_account_summary
 app.get('/api/account/me', accountLimiter, requireAuth, async (req: Request, res: Response) => {
   try {
     const user: AuthUser = (req as any).user;
@@ -145,104 +145,42 @@ app.get('/api/account/me', accountLimiter, requireAuth, async (req: Request, res
       });
     }
 
-    // 1. Tentar executar a função RPC de resumo consolidado
-    try {
-      const { data: summary, error: rpcError } = await supabase.rpc('get_account_summary', {
-        p_user_id: user.id
-      });
+    const { data: summary, error: rpcError } = await supabase.rpc('get_account_summary', {
+      p_user_id: user.id
+    });
 
-      if (!rpcError && summary) {
-        return res.json({
-          user: {
-            id: user.id,
-            email: user.email
-          },
-          account: summary
-        });
-      }
-    } catch {
-      // Prossegue para consulta direta às tabelas se a migration da função ainda estiver sendo aplicada
-    }
-
-    // 2. Consulta direta às tabelas no Supabase (sem fallback de memória)
-    const { data: profile, error: profileErr } = await supabase
-      .from('seller_profiles')
-      .select('*')
-      .eq('id', user.id)
-      .maybeSingle();
-
-    if (profileErr) {
-      console.error('[Supabase Error] Falha ao consultar seller_profiles:', profileErr.message);
+    if (rpcError) {
+      console.error('[Supabase Error] Falha ao executar get_account_summary:', rpcError.message);
       return res.status(503).json({
         success: false,
         code: 'SERVICE_UNAVAILABLE',
-        error: 'Serviço temporariamente indisponível.'
+        error: 'Serviço de consulta de conta temporariamente indisponível.'
       });
     }
 
-    // Se o perfil ainda não existir (ex: antes do primeiro trigger de auth rodar), cria o registro oficial
-    let currentProfile = profile;
-    if (!currentProfile) {
-      const { data: newProfile, error: insertErr } = await supabase
-        .from('seller_profiles')
-        .insert({
-          id: user.id,
-          email: user.email,
-          plan_code: 'free',
-          subscription_status: 'active',
-          free_credit_limit: 10,
-          extra_credits: 0
-        })
-        .select()
-        .single();
-
-      if (insertErr) {
-        console.error('[Supabase Error] Falha ao provisionar perfil:', insertErr.message);
-        return res.status(503).json({
-          success: false,
-          code: 'SERVICE_UNAVAILABLE',
-          error: 'Serviço temporariamente indisponível.'
-        });
-      }
-      currentProfile = newProfile;
+    if (!summary) {
+      console.error('[Supabase Error] Perfil de vendedor não provisionado para o usuário:', user.id);
+      return res.status(503).json({
+        success: false,
+        code: 'SERVICE_UNAVAILABLE',
+        error: 'Conta de vendedor ainda não foi provisionada. Entre em contato com o suporte.'
+      });
     }
-
-    // Contar usage_events
-    const { count: freeUsedCount, error: countErr } = await supabase
-      .from('usage_events')
-      .select('*', { count: 'exact', head: true })
-      .eq('user_id', user.id)
-      .eq('usage_source', 'free');
-
-    const freeUsed = countErr ? 0 : Number(freeUsedCount || 0);
-    const freeLimit = Number(currentProfile.free_credit_limit ?? 10);
-    const extraCredits = Number(currentProfile.extra_credits ?? 0);
-    const remaining = Math.max(0, freeLimit - freeUsed) + extraCredits;
-
-    const account = {
-      planCode: currentProfile.plan_code || 'free',
-      subscriptionStatus: currentProfile.subscription_status || 'active',
-      freeLimit,
-      freeUsed,
-      monthlyLimit: currentProfile.monthly_limit ? Number(currentProfile.monthly_limit) : null,
-      monthlyUsed: 0,
-      extraCredits,
-      remaining,
-      unlimited: currentProfile.plan_code === 'volume',
-      currentPeriodStart: currentProfile.current_period_start || null,
-      currentPeriodEnd: currentProfile.current_period_end || null
-    };
 
     return res.json({
       user: {
         id: user.id,
         email: user.email
       },
-      account
+      account: summary
     });
   } catch (err: any) {
     console.error('Erro em /api/account/me:', err);
-    return res.status(500).json({ success: false, error: 'Erro ao consultar conta.' });
+    return res.status(503).json({
+      success: false,
+      code: 'SERVICE_UNAVAILABLE',
+      error: 'Erro temporário ao consultar conta.'
+    });
   }
 });
 
@@ -254,39 +192,29 @@ app.get('/api/user/profile', requireAuth, async (req: Request, res: Response) =>
     return res.status(503).json({ success: false, error: 'Serviço indisponível.' });
   }
 
-  const { data: profile, error } = await supabase
-    .from('seller_profiles')
-    .select('*')
-    .eq('id', user.id)
-    .maybeSingle();
+  const { data: summary, error: rpcError } = await supabase.rpc('get_account_summary', {
+    p_user_id: user.id
+  });
 
-  if (error || !profile) {
+  if (rpcError || !summary) {
     return res.status(503).json({ success: false, error: 'Perfil não encontrado ou indisponível.' });
   }
 
-  const { count: freeCount } = await supabase
-    .from('usage_events')
-    .select('*', { count: 'exact', head: true })
-    .eq('user_id', user.id)
-    .eq('usage_source', 'free');
-
-  const freeUsed = Number(freeCount || 0);
-  const remaining = Math.max(0, Number(profile.free_credit_limit || 10) - freeUsed) + Number(profile.extra_credits || 0);
-
   let visualPlan = 'Gratuito (10 envios)';
-  if (profile.plan_code === 'pro') visualPlan = 'Pro (50 envios)';
-  if (profile.plan_code === 'volume') visualPlan = 'Alto Volume (Ilimitado)';
+  if (summary.planCode === 'pro') visualPlan = 'Pro (50 envios)';
+  if (summary.planCode === 'volume') visualPlan = 'Alto Volume (Ilimitado)';
 
   return res.json({
     success: true,
     profile: {
-      userId: profile.id,
-      email: profile.email || user.email,
+      userId: user.id,
+      email: user.email,
       plan: visualPlan,
-      freeDossiersRemaining: remaining,
-      monthlyLimit: profile.monthly_limit || 10,
-      usedThisMonth: freeUsed,
-      extraCredits: profile.extra_credits || 0
+      freeDossiersRemaining: summary.unlimited ? null : summary.remaining,
+      monthlyLimit: summary.monthlyLimit || 10,
+      usedThisMonth: summary.monthlyUsed || summary.freeUsed || 0,
+      extraCredits: summary.extraCredits || 0,
+      unlimited: Boolean(summary.unlimited)
     }
   });
 });
@@ -404,122 +332,20 @@ app.post('/api/dossiers', dossierLimiter, requireAuth, async (req: Request, res:
         });
       }
 
-      // Se a função RPC não foi criada ainda no Supabase remoto (ex: antes da migration),
-      // faz a verificação direta nas tabelas sem memória
-      if (rpcError.code === 'PGRST202' || rpcError.code === '42883') {
-        // 1. Checar se já existe
-        const { data: existingPack } = await supabase
-          .from('provapacks')
-          .select('public_id, recording_id, original_sha256, processed_sha256')
-          .eq('public_id', publicId)
-          .maybeSingle();
-
-        if (existingPack) {
-          if (
-            existingPack.recording_id === recordingId &&
-            existingPack.original_sha256 === originalSha256 &&
-            existingPack.processed_sha256 === processedSha256
-          ) {
-            return res.json({
-              success: true,
-              dossierId: publicId,
-              persistedToSupabase: true,
-              idempotent: true
-            });
-          }
-          return res.status(409).json({
-            success: false,
-            error: 'Registro já existe e não pode ser alterado.'
-          });
-        }
-
-        // 2. Checar cota diretamente em seller_profiles
-        const { data: profile } = await supabase
-          .from('seller_profiles')
-          .select('*')
-          .eq('id', user.id)
-          .maybeSingle();
-
-        const { count: freeEvents } = await supabase
-          .from('usage_events')
-          .select('*', { count: 'exact', head: true })
-          .eq('user_id', user.id)
-          .eq('usage_source', 'free');
-
-        const freeUsed = Number(freeEvents || 0);
-        const freeLimit = Number(profile?.free_credit_limit ?? 10);
-        const extraCredits = Number(profile?.extra_credits ?? 0);
-        const hasCredits = (freeUsed < freeLimit) || (extraCredits > 0) || (profile?.plan_code === 'volume');
-
-        if (!hasCredits) {
-          return res.status(402).json({
-            success: false,
-            code: 'NO_CREDITS',
-            error: 'Você não possui envios disponíveis.'
-          });
-        }
-
-        // Inserir registro
-        const payload = {
-          user_id: user.id,
-          owner_user_id: user.id,
-          public_id: publicId,
-          recording_id: recordingId,
-          marketplace: dossier.marketplace || 'Outros',
-          order_number: String(dossier.order_number || dossier.orderNumber || '').trim(),
-          tracking_code: dossier.tracking_code || dossier.trackingCode || null,
-          product_name: String(dossier.product_name || dossier.productName || '').trim(),
-          serial_number: dossier.serial_number || dossier.serialNumber || null,
-          recorded_at: dossier.recorded_at || dossier.recordedAt || new Date().toISOString(),
-          started_at_utc: dossier.started_at_utc || dossier.startedAtUtc || null,
-          ended_at_utc: dossier.ended_at_utc || dossier.endedAtUtc || null,
-          timezone: dossier.timezone || 'America/Sao_Paulo',
-          time_source: dossier.time_source || dossier.timeSource || 'DEVICE_WITH_SERVER_REFERENCE',
-          duration_seconds: Number(dossier.duration_seconds || dossier.durationSeconds || 0),
-          original_sha256: originalSha256,
-          processed_sha256: processedSha256,
-          file_size_bytes: Number(dossier.file_size_bytes || dossier.fileSizeBytes || 0),
-          status: dossier.status || 'validado'
-        };
-
-        const { error: insertErr } = await supabase.from('provapacks').insert(payload);
-        if (insertErr) {
-          console.error('[Supabase Error] Falha ao inserir provapack:', insertErr);
-          return res.status(503).json({
-            success: false,
-            code: 'SERVICE_UNAVAILABLE',
-            error: 'Registro online temporariamente indisponível'
-          });
-        }
-
-        // Inserir usage_event
-        const usageSource = (freeUsed < freeLimit) ? 'free' : 'extra';
-        await supabase.from('usage_events').insert({
-          user_id: user.id,
-          dossier_id: publicId,
-          usage_source: usageSource
-        });
-
-        if (usageSource === 'extra') {
-          await supabase.from('seller_profiles').update({
-            extra_credits: Math.max(0, extraCredits - 1)
-          }).eq('id', user.id);
-        }
-
-        return res.json({
-          success: true,
-          dossierId: publicId,
-          persistedToSupabase: true,
-          idempotent: false,
-          remainingCredits: Math.max(0, freeLimit - freeUsed - 1) + extraCredits
+      if (errMsg.includes('PROFILE_NOT_PROVISIONED')) {
+        return res.status(503).json({
+          success: false,
+          code: 'SERVICE_UNAVAILABLE',
+          error: 'Conta de vendedor ainda não foi provisionada.'
         });
       }
 
-      console.error('[Supabase Error] Falha na execução da RPC:', rpcError);
+      // Fail-closed absoluto (P2 & P10): Nenhuma criação manual/parcial se a RPC falhar
+      console.error('[Supabase Error] Falha na execução da RPC register_provapack_with_usage:', rpcError);
       return res.status(503).json({
         success: false,
         code: 'SERVICE_UNAVAILABLE',
-        error: 'Registro online temporariamente indisponível'
+        error: 'Serviço de registro temporariamente indisponível.'
       });
     }
 
