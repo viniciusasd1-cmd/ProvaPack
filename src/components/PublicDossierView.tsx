@@ -29,16 +29,7 @@ export const PublicDossierView: React.FC<PublicDossierViewProps> = ({
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [notFoundError, setNotFoundError] = useState<string | null>(null);
-
-  const [selectedDossier, setSelectedDossier] = useState<Dossier | null>(() => {
-    if (initialDossierId) {
-      return dossiers.find(d => 
-        d.id.toLowerCase() === initialDossierId.toLowerCase() ||
-        d.recordingId?.toLowerCase() === initialDossierId.toLowerCase()
-      ) || null;
-    }
-    return dossiers[0] || null;
-  });
+  const [selectedDossier, setSelectedDossier] = useState<Dossier | null>(null);
 
   const fetchDossierFromApi = async (id: string): Promise<Dossier | null> => {
     try {
@@ -48,7 +39,7 @@ export const PublicDossierView: React.FC<PublicDossierViewProps> = ({
       if (!data.success || !data.dossier) return null;
       const d = data.dossier;
 
-      // Check if user has local matching blob data
+      // Check if user has local matching blob data solely to enrich media/accessories
       const localMatch = dossiers.find(loc => loc.id === (d.public_id || d.id) || loc.recordingId === (d.recording_id || d.recordingId));
 
       return {
@@ -75,7 +66,7 @@ export const PublicDossierView: React.FC<PublicDossierViewProps> = ({
         videoMimeType: localMatch?.videoMimeType || 'video/webm',
         checkpoints: localMatch?.checkpoints || d.checkpoints || [],
         status: d.status || 'validado',
-        verificationStatus: 'Registro oficial Supabase',
+        verificationStatus: 'Registro online confirmado',
         timeSource: d.time_source || 'DEVICE_WITH_SERVER_REFERENCE',
         timezone: d.timezone || 'America/Sao_Paulo',
         onlinePersisted: true
@@ -88,17 +79,11 @@ export const PublicDossierView: React.FC<PublicDossierViewProps> = ({
   useEffect(() => {
     if (initialDossierId) {
       setSearchQuery(initialDossierId);
-      const localFound = dossiers.find(d => 
-        d.id.toLowerCase() === initialDossierId.toLowerCase() ||
-        d.recordingId?.toLowerCase() === initialDossierId.toLowerCase()
-      );
-      if (localFound) {
-        setSelectedDossier(localFound);
-        setNotFoundError(null);
-        return;
-      }
-
       setIsLoading(true);
+      setNotFoundError(null);
+      setSelectedDossier(null);
+
+      // Sempre consultar backend para validação pública oficial (sem bypass local)
       fetchDossierFromApi(initialDossierId).then((apiDossier) => {
         setIsLoading(false);
         if (apiDossier) {
@@ -106,16 +91,14 @@ export const PublicDossierView: React.FC<PublicDossierViewProps> = ({
           setNotFoundError(null);
         } else {
           setSelectedDossier(null);
-          setNotFoundError(`Registro não encontrado para "${initialDossierId}".`);
+          setNotFoundError('Registro não encontrado');
         }
       });
-    } else if (dossiers.length > 0) {
-      setSelectedDossier(dossiers[0]);
-      setNotFoundError(null);
     } else {
       setSelectedDossier(null);
+      setNotFoundError(null);
     }
-  }, [initialDossierId, dossiers]);
+  }, [initialDossierId]);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -124,21 +107,9 @@ export const PublicDossierView: React.FC<PublicDossierViewProps> = ({
 
     setIsLoading(true);
     setNotFoundError(null);
+    setSelectedDossier(null);
 
-    const localFound = dossiers.find(d => 
-      d.id.toUpperCase() === query.toUpperCase() || 
-      d.orderNumber.toUpperCase() === query.toUpperCase() ||
-      (d.trackingCode && d.trackingCode.toUpperCase() === query.toUpperCase()) ||
-      d.fileHashSha256.toUpperCase() === query.toUpperCase() ||
-      (d.recordingId && d.recordingId.toUpperCase() === query.toUpperCase())
-    );
-
-    if (localFound) {
-      setSelectedDossier(localFound);
-      setIsLoading(false);
-      return;
-    }
-
+    // Consulta direta ao backend suportando public_id e recording_id
     const apiDossier = await fetchDossierFromApi(query);
     setIsLoading(false);
     if (apiDossier) {
@@ -146,7 +117,7 @@ export const PublicDossierView: React.FC<PublicDossierViewProps> = ({
       setNotFoundError(null);
     } else {
       setSelectedDossier(null);
-      setNotFoundError(`Registro não encontrado para "${query}".`);
+      setNotFoundError('Registro não encontrado');
     }
   };
 
@@ -217,7 +188,7 @@ export const PublicDossierView: React.FC<PublicDossierViewProps> = ({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Digite o ID do Dossiê, Pedido ou Hash..."
+              placeholder="Digite o ID ProvaPack ou ID da gravação"
               className="w-full bg-slate-900 border border-slate-800 rounded-2xl pl-11 pr-28 py-3 text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 shadow-xl min-h-[44px]"
             />
             <button
@@ -633,14 +604,14 @@ export const PublicDossierView: React.FC<PublicDossierViewProps> = ({
         ) : isLoading ? (
           <div className="text-center py-20 text-slate-400 bg-slate-900/60 rounded-3xl border border-slate-800 p-8 flex flex-col items-center justify-center">
             <Loader2 className="w-8 h-8 text-sky-400 animate-spin mb-3" />
-            <span className="text-sm font-semibold text-slate-200">Consultando registro oficial no Supabase...</span>
+            <span className="text-sm font-semibold text-slate-200">Consultando registro online...</span>
           </div>
         ) : notFoundError ? (
           <div className="text-center py-16 bg-slate-900 border border-slate-800 rounded-3xl p-8 max-w-lg mx-auto shadow-2xl">
             <div className="w-14 h-14 rounded-2xl bg-red-500/10 text-red-400 flex items-center justify-center mx-auto mb-4 border border-red-500/20">
               <ShieldAlert className="w-7 h-7" />
             </div>
-            <h3 className="text-lg font-bold text-white mb-1.5">Registro Não Encontrado (404)</h3>
+            <h3 className="text-lg font-bold text-white mb-1.5">Registro não encontrado</h3>
             <p className="text-xs text-slate-400 mb-6">
               {notFoundError}
             </p>
@@ -656,7 +627,7 @@ export const PublicDossierView: React.FC<PublicDossierViewProps> = ({
           </div>
         ) : (
           <div className="text-center py-16 text-slate-400 bg-slate-900/50 rounded-3xl border border-slate-800 p-8">
-            Nenhum dossiê selecionado. Utilize a busca acima com o ID do registro.
+            Nenhum dossiê selecionado. Digite o ID ProvaPack ou ID da gravação na busca acima.
           </div>
         )}
       </div>

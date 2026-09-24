@@ -257,6 +257,35 @@ export function saveDossierToStorage(dossier: Dossier): void {
   }
 }
 
+/**
+ * Atualiza um dossiê existente em memória, IndexedDB e localStorage
+ * sem alterar a cota do vendedor (freeDossiersRemaining e usedThisMonth permanecem inalterados).
+ */
+export function updateDossierInStorage(dossier: Dossier): void {
+  try {
+    // 1. Update in-memory cache
+    const current = loadStoredDossiers();
+    const updated = current.map(d => d.id === dossier.id ? dossier : d);
+    if (!current.some(d => d.id === dossier.id)) {
+      updated.unshift(dossier);
+    }
+    cachedDossiers = updated;
+
+    // 2. Persist full fidelity record to IndexedDB
+    idbSaveDossier(dossier).catch((idbErr) => {
+      console.warn('Aviso ao atualizar no IndexedDB:', idbErr);
+    });
+
+    // 3. Persist safely to localStorage
+    safeSaveUserDossiersToLocalStorage(updated);
+
+    // 4. Notify active subscribers (SEM alterar cota do vendedor)
+    notifySubscribers();
+  } catch (err) {
+    console.error('Falha ao atualizar dossiê:', err);
+  }
+}
+
 export function deleteDossierFromStorage(id: string): void {
   try {
     cachedDossiers = cachedDossiers.filter(d => d.id !== id);

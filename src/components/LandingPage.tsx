@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { 
-  ShieldCheck, Sparkles, Check, ArrowRight, Play, ChevronRight, Star,
+  ShieldCheck, Sparkles, Check, ArrowRight, Play, ChevronRight,
   ShieldAlert, Smartphone, ExternalLink, CheckCircle2, Laptop, Gamepad2,
   Watch, Maximize2, X
 } from 'lucide-react';
@@ -504,15 +504,15 @@ O ProvaPack não garante o resultado de uma disputa, que continua sujeito às re
         </div>
       </section>
 
-      {/* 6. Interactive ROI Calculator */}
+      {/* 6. Interactive ROI Calculator (Simulação Ilustrativa) */}
       <section className="max-w-4xl mx-auto rounded-3xl bg-gradient-to-b from-slate-900 to-indigo-950/40 border border-slate-800 p-6 sm:p-9 shadow-2xl">
         <div className="text-center max-w-xl mx-auto mb-8">
-          <span className="text-xs font-bold text-sky-400 uppercase tracking-wider">Calculadora de ROI do Vendedor</span>
+          <span className="text-xs font-bold text-sky-400 uppercase tracking-wider">Simulação ilustrativa</span>
           <h2 className="mt-1 text-2xl sm:text-3xl font-extrabold text-white">
-            Quanto você pode economizar por mês?
+            Simulação de Potencial de Economia
           </h2>
           <p className="mt-2 text-xs sm:text-sm text-slate-400">
-            Simule o impacto financeiro de evitar que uma ou duas fraudes passem batidas na sua operação.
+            Ferramenta de simulação ilustrativa com base nos parâmetros que você definir. A taxa indicada é um valor hipotético de exemplo e não constitui dado de mercado verificado.
           </p>
         </div>
 
@@ -557,7 +557,7 @@ O ProvaPack não garante o resultado de uma disputa, que continua sujeito às re
 
             <div>
               <div className="flex justify-between text-xs text-slate-300 font-semibold mb-1.5">
-                <label htmlFor="roi-fraud-rate">Índice estimado de contestações/devoluções:</label>
+                <label htmlFor="roi-fraud-rate">Taxa de contestação para simulação (%):</label>
                 <span className="text-sky-400 font-bold">{fraudRate}%</span>
               </div>
               <input
@@ -568,15 +568,18 @@ O ProvaPack não garante o resultado de uma disputa, que continua sujeito às re
                 value={fraudRate}
                 onChange={(e) => setFraudRate(Number(e.target.value))}
                 id="roi-fraud-rate"
-                aria-label="Índice estimado de contestações e devoluções"
+                aria-label="Taxa de contestação para simulação ilustrativa"
                 className="h-2 w-full cursor-pointer rounded-lg bg-slate-800 accent-sky-400"
               />
+              <span className="text-[10px] text-slate-500 block mt-1">
+                * Valor de exemplo para fins de simulação ilustrativa; não representa estatística verificada de mercado.
+              </span>
             </div>
           </div>
 
           {/* Result Card */}
           <div className="p-6 rounded-2xl bg-slate-950/80 border border-slate-800 text-center">
-            <span className="text-xs text-slate-400 font-medium block">Prejuízo Mensal Potencial com Devoluções:</span>
+            <span className="text-xs text-slate-400 font-medium block">Prejuízo Mensal Potencial Simulado:</span>
             <span className="text-3xl sm:text-4xl font-black text-rose-400 mt-1 block">
               R$ {estimatedMonthlyLoss.toLocaleString('pt-BR')}
             </span>
@@ -587,74 +590,27 @@ O ProvaPack não garante o resultado de uma disputa, que continua sujeito às re
             </div>
 
             <div className="p-3 rounded-xl bg-emerald-950/50 border border-emerald-800/80 text-emerald-300 text-xs">
-              <strong>Retorno estimado: {estimatedRoi > 0 ? `+${estimatedRoi}%` : 'abaixo do custo'}</strong>
+              <strong>Simulação ilustrativa: {estimatedRoi > 0 ? `+${estimatedRoi}% estimado` : 'abaixo do custo'}</strong>
               <span className="block text-[11px] text-emerald-400/80 mt-0.5">
                 {roiMessage}
               </span>
             </div>
 
+            <p className="mt-3 text-[10px] text-slate-500 leading-tight">
+              * Simulação meramente ilustrativa. A resolução de disputas depende das políticas e da avaliação autônoma de cada marketplace.
+            </p>
+
             <button
               onClick={onStartTrial}
-              className="w-full mt-4 py-3 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white font-bold text-xs shadow-md shadow-sky-500/20"
+              className="w-full mt-3 py-3 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white font-bold text-xs shadow-md shadow-sky-500/20"
             >
-              Proteger Minha Operação Agora
+              Iniciar Teste Gratuito
             </button>
           </div>
         </div>
       </section>
 
-      {/* 7. Social Proof & Testimonials */}
-      <section className="max-w-5xl mx-auto">
-        <div className="text-center max-w-xl mx-auto mb-10">
-          <span className="text-xs font-bold text-sky-400 uppercase tracking-wider">Histórias de Sucesso</span>
-          <h2 className="mt-1 text-2xl sm:text-3xl font-extrabold text-white">
-            Vendedores que viraram o jogo nas mediações
-          </h2>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-          <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">
-            <div className="flex items-center gap-1 text-amber-400 mb-3">
-              {[...Array(5)].map((_, i) => <Star key={i} className="w-3.5 h-3.5 fill-amber-400" />)}
-            </div>
-            <p className="text-xs text-slate-300 leading-relaxed italic">
-              “Um comprador alegou ter recebido uma embalagem vazia em um iPhone 14. Anexei o PDF do ProvaPack com o hash SHA-256 e o texto gerado pela IA. O Mercado Livre encerrou a mediação a meu favor em menos de 2 horas!”
-            </p>
-            <div className="mt-4 pt-3 border-t border-slate-800 text-xs">
-              <strong className="text-white block">Rodrigo Meneses</strong>
-              <span className="text-slate-400 text-[11px]">MercadoLíder Platinum • Eletrônicos (SP)</span>
-            </div>
-          </div>
-
-          <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">
-            <div className="flex items-center gap-1 text-amber-400 mb-3">
-              {[...Array(5)].map((_, i) => <Star key={i} className="w-3.5 h-3.5 fill-amber-400" />)}
-            </div>
-            <p className="text-xs text-slate-300 leading-relaxed italic">
-              “Na Shopee os mediadores costumavam recusar meus links de vídeo do Google Drive dizendo que não abria. Com o relatório técnico e os 7 quadros congelados do ProvaPack, a taxa de vitória nas disputas subiu para 100%.”
-            </p>
-            <div className="mt-4 pt-3 border-t border-slate-800 text-xs">
-              <strong className="text-white block">Camila Ferraz</strong>
-              <span className="text-slate-400 text-[11px]">Shopee Star Seller • Perfumaria & Beleza (PR)</span>
-            </div>
-          </div>
-
-          <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">
-            <div className="flex items-center gap-1 text-amber-400 mb-3">
-              {[...Array(5)].map((_, i) => <Star key={i} className="w-3.5 h-3.5 fill-amber-400" />)}
-            </div>
-            <p className="text-xs text-slate-300 leading-relaxed italic">
-              “Nossa expedição embala cerca de 60 pedidos por dia. O ProvaPack não atrasou em nada a bancada. Pelo contrário: padronizou o processo da equipe e nos deu tranquilidade jurídica total.”
-            </p>
-            <div className="mt-4 pt-3 border-t border-slate-800 text-xs">
-              <strong className="text-white block">Luciano Guimarães</strong>
-              <span className="text-slate-400 text-[11px]">Vendedor Amazon FBM • Informática & Gamer (MG)</span>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* 8. FAQ Accordion Section */}
+      {/* 7. FAQ Accordion Section */}
       <section className="max-w-3xl mx-auto">
         <div className="text-center max-w-xl mx-auto mb-8">
           <h2 className="text-2xl sm:text-3xl font-extrabold text-white">

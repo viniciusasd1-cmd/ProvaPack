@@ -7,7 +7,7 @@ import {
 import { Marketplace, Dossier, CheckpointFrame, SellerAccount, EvidenceRecording, ProcessingStatus, TimeSource } from '../types';
 import { RECORDING_STEPS } from '../data/steps';
 import { calculateBlobSha256, generateDossierId, formatSecondsToTime, formatBrasiliaDate } from '../utils/crypto';
-import { saveDossierToStorage } from '../utils/storage';
+import { saveDossierToStorage, updateDossierInStorage } from '../utils/storage';
 import {
   generateRecordingId,
   getTimezoneOffsetString,
@@ -770,8 +770,8 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
       ? 'Registro online confirmado' 
       : 'Registro local (Online pendente)';
 
-    // Update storage with final online confirmation status
-    saveDossierToStorage(newDossier);
+    // Update storage with final online confirmation status (without deducting quota again)
+    updateDossierInStorage(newDossier);
 
     setProcessingStatus(onlineNotice);
     setTimeout(() => {

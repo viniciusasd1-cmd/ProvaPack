@@ -39,9 +39,6 @@ function getSupabase(): SupabaseClient | null {
   return supabaseClient;
 }
 
-// Runtime in-memory cache for fast lookup within the running server session
-const registeredDossiers = new Map<string, any>();
-
 // API Routes
 app.get('/api/health', (req: Request, res: Response) => {
   res.json({ status: 'ok', service: 'ProvaPack API', timestamp: new Date().toISOString() });
@@ -78,7 +75,7 @@ app.get('/api/time', (req: Request, res: Response) => {
   });
 });
 
-// Register or update dossier (Persists to Supabase as official persistence)
+// Register dossier (Strictly immutable & idempotent: insert-only with SHA-256 validation)
 app.post('/api/dossiers', async (req: Request, res: Response) => {
   try {
     const dossier = req.body;
@@ -128,23 +125,84 @@ app.post('/api/dossiers', async (req: Request, res: Response) => {
       status: dossier.status || 'validado'
     };
 
-    const { error: dbError } = await supabase
+    // 1. Verificar se public_id já existe para garantir imutabilidade e idempotência
+    const { data: existing, error: queryError } = await supabase
       .from('provapacks')
-      .upsert(payload, { onConflict: 'public_id' });
+      .select('public_id, recording_id, original_sha256, processed_sha256, recorded_at')
+      .eq('public_id', publicId)
+      .maybeSingle();
 
-    if (dbError) {
-      console.error('[Supabase Erro] Falha ao persistir no Supabase:', dbError);
+    if (queryError) {
+      console.error('[Supabase Erro] Falha ao verificar registro existente:', queryError);
       return res.status(500).json({
         success: false,
         error: 'Registro online temporariamente indisponível'
       });
     }
 
-    // Runtime in-memory cache for fast read within active process
-    const savedRecord = { ...dossier, ...payload };
-    registeredDossiers.set(publicId, savedRecord);
-    if (recordingId && recordingId !== publicId) {
-      registeredDossiers.set(recordingId, savedRecord);
+    if (existing) {
+      // Se public_id já existe e os hashes e recording_id são exatamente os mesmos:
+      // Considerar retry idempotente -> retornar success true sem alterar o registro
+      const isIdempotentMatch =
+        existing.recording_id === recordingId &&
+        existing.original_sha256 === originalSha256 &&
+        existing.processed_sha256 === processedSha256;
+
+      if (isIdempotentMatch) {
+        return res.json({
+          success: true,
+          dossierId: publicId,
+          persistedToSupabase: true,
+          idempotent: true
+        });
+      } else {
+        // Se public_id já existe com dados diferentes: HTTP 409
+        return res.status(409).json({
+          success: false,
+          error: 'Registro já existe e não pode ser alterado.'
+        });
+      }
+    }
+
+    // 2. Se public_id não existe: INSERT (insert-only, imutável)
+    const { error: insertError } = await supabase
+      .from('provapacks')
+      .insert(payload);
+
+    if (insertError) {
+      // Concorrência / conflito de chave única
+      if (insertError.code === '23505') {
+        const { data: retryCheck } = await supabase
+          .from('provapacks')
+          .select('public_id, recording_id, original_sha256, processed_sha256')
+          .eq('public_id', publicId)
+          .maybeSingle();
+
+        if (
+          retryCheck &&
+          retryCheck.recording_id === recordingId &&
+          retryCheck.original_sha256 === originalSha256 &&
+          retryCheck.processed_sha256 === processedSha256
+        ) {
+          return res.json({
+            success: true,
+            dossierId: publicId,
+            persistedToSupabase: true,
+            idempotent: true
+          });
+        }
+
+        return res.status(409).json({
+          success: false,
+          error: 'Registro já existe e não pode ser alterado.'
+        });
+      }
+
+      console.error('[Supabase Erro] Falha ao inserir no Supabase:', insertError);
+      return res.status(500).json({
+        success: false,
+        error: 'Registro online temporariamente indisponível'
+      });
     }
 
     return res.json({ 
@@ -158,7 +216,7 @@ app.post('/api/dossiers', async (req: Request, res: Response) => {
   }
 });
 
-// Get dossier by ID for public verification
+// Get dossier by ID for public verification (strictly via Supabase backend confirmation)
 app.get('/api/dossiers/:id', async (req: Request, res: Response) => {
   try {
     const rawId = req.params.id ? req.params.id.trim() : '';
@@ -167,18 +225,26 @@ app.get('/api/dossiers/:id', async (req: Request, res: Response) => {
     }
 
     const supabase = getSupabase();
-    if (supabase) {
-      try {
-        const { data, error } = await supabase
-          .from('provapacks')
-          .select('*')
-          .or(`public_id.eq.${rawId},recording_id.eq.${rawId}`)
-          .maybeSingle();
+    if (!supabase) {
+      return res.status(503).json({ success: false, error: 'Serviço de verificação temporariamente indisponível' });
+    }
 
-        if (data && !error) {
-          return res.json({
-            success: true,
-            dossier: {
+    try {
+      const { data, error } = await supabase
+        .from('provapacks')
+        .select('*')
+        .or(`public_id.eq.${rawId},recording_id.eq.${rawId}`)
+        .maybeSingle();
+
+      if (error) {
+        console.warn('[Supabase Aviso] Erro na consulta ao Supabase:', error.message || error);
+        return res.status(500).json({ success: false, error: 'Erro ao consultar registro.' });
+      }
+
+      if (data) {
+        return res.json({
+          success: true,
+          dossier: {
             id: data.public_id,
             public_id: data.public_id,
             recordingId: data.recording_id,
@@ -206,55 +272,17 @@ app.get('/api/dossiers/:id', async (req: Request, res: Response) => {
             timezone: data.timezone,
             timeSource: data.time_source,
             status: data.status,
-            verificationStatus: 'Registro encontrado',
+            verificationStatus: 'Registro online confirmado',
             created_at: data.created_at
           }
         });
       }
     } catch (supabaseQueryErr: any) {
-      console.warn('[Supabase Aviso] Erro na consulta ao Supabase, buscando no registro local:', supabaseQueryErr?.message || supabaseQueryErr);
-    }
-  }
-
-    // Check runtime memory cache
-    const cached = registeredDossiers.get(rawId);
-    if (cached) {
-      return res.json({
-        success: true,
-        dossier: {
-          id: cached.public_id || cached.id,
-          public_id: cached.public_id || cached.id,
-          recordingId: cached.recording_id || cached.recordingId,
-          recording_id: cached.recording_id || cached.recordingId,
-          marketplace: cached.marketplace,
-          orderNumber: cached.order_number || cached.orderNumber,
-          order_number: cached.order_number || cached.orderNumber,
-          trackingCode: cached.tracking_code || cached.trackingCode,
-          tracking_code: cached.tracking_code || cached.trackingCode,
-          productName: cached.product_name || cached.productName,
-          product_name: cached.product_name || cached.productName,
-          serialNumber: cached.serial_number || cached.serialNumber,
-          serial_number: cached.serial_number || cached.serialNumber,
-          recordedAt: cached.recorded_at || cached.recordedAt,
-          recorded_at: cached.recorded_at || cached.recordedAt,
-          durationSeconds: cached.duration_seconds || cached.durationSeconds,
-          duration_seconds: cached.duration_seconds || cached.durationSeconds,
-          originalSha256: cached.original_sha256 || cached.originalSha256,
-          original_sha256: cached.original_sha256 || cached.originalSha256,
-          processedSha256: cached.processed_sha256 || cached.processedSha256,
-          processed_sha256: cached.processed_sha256 || cached.processedSha256,
-          fileHashSha256: cached.processed_sha256 || cached.fileHashSha256,
-          fileSizeBytes: cached.file_size_bytes || cached.fileSizeBytes,
-          file_size_bytes: cached.file_size_bytes || cached.fileSizeBytes,
-          timezone: cached.timezone,
-          timeSource: cached.time_source || cached.timeSource,
-          status: cached.status || 'validado',
-          verificationStatus: 'Registro encontrado',
-          created_at: cached.created_at || new Date().toISOString()
-        }
-      });
+      console.warn('[Supabase Aviso] Erro na consulta ao Supabase:', supabaseQueryErr?.message || supabaseQueryErr);
+      return res.status(500).json({ success: false, error: 'Erro ao consultar registro.' });
     }
 
+    // Registro não encontrado no Supabase
     return res.status(404).json({ success: false, error: 'Registro não encontrado' });
   } catch (err: any) {
     console.error('Erro na consulta do dossiê:', err);
