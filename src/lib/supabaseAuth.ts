@@ -9,7 +9,7 @@ export const isSupabaseAuthConfigured = Boolean(
   supabaseUrl.startsWith('http')
 );
 
-// Cria o cliente Supabase Auth frontend exclusivamente com a chave pública
+// Cliente Supabase Auth frontend exclusivamente com a chave pública
 // Configurações obrigatórias: persistSession, autoRefreshToken, detectSessionInUrl
 export const supabaseAuth: SupabaseClient = createClient(
   isSupabaseAuthConfigured ? supabaseUrl : 'https://placeholder.supabase.co',
@@ -18,9 +18,7 @@ export const supabaseAuth: SupabaseClient = createClient(
     auth: {
       persistSession: true,
       autoRefreshToken: true,
-      detectSessionInUrl: true,
-      storageKey: 'provapack_auth_token',
-      flowType: 'implicit'
+      detectSessionInUrl: true
     }
   }
 );

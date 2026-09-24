@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { Dossier, SellerAccount } from './types';
 import { loadStoredDossiers, loadSellerAccount, saveSellerAccount, subscribeToDossiers } from './utils/storage';
-import { getShowcaseDossier } from './data/productShowcase';
+import { getShowcaseDossier, PRODUCT_SHOWCASES } from './data/productShowcase';
 import { useAuth } from './contexts/AuthContext';
 import { Navbar } from './components/Navbar';
 import { FraudStatsBanner } from './components/FraudStatsBanner';
@@ -19,7 +19,7 @@ import { LandingPage } from './components/LandingPage';
 import { AuthModal } from './components/AuthModal';
 
 export default function App() {
-  const { isAuthenticated, profile } = useAuth();
+  const { isAuthenticated, user, profile } = useAuth();
   const [dossiers, setDossiers] = useState<Dossier[]>([]);
   const [seller, setSeller] = useState<SellerAccount>(loadSellerAccount());
   
@@ -88,6 +88,20 @@ export default function App() {
     };
   }, []);
 
+  const showcaseIds = React.useMemo(() => new Set(PRODUCT_SHOWCASES.map(p => p.dossierId)), []);
+
+  // Isolamento entre usuários: usuário logado visualiza seus próprios dossiês e as demos públicas.
+  // Usuário deslogado visualiza apenas as demos públicas (sem expor evidências privadas locais de terceiros).
+  const visibleDossiers = React.useMemo(() => {
+    return dossiers.filter(d => {
+      if (showcaseIds.has(d.id)) return true;
+      if (isAuthenticated && user?.id) {
+        return d.ownerUserId === user.id;
+      }
+      return false;
+    });
+  }, [dossiers, isAuthenticated, user?.id, showcaseIds]);
+
   const handleStartRecording = () => {
     if (!isAuthenticated) {
       setAuthModalMessage('Identifique-se com seu e-mail para validar seus 10 envios gratuitos e salvar seu dossiê.');
@@ -122,7 +136,7 @@ export default function App() {
     const query = lookupInput.trim().toUpperCase();
     if (!query) return;
 
-    const found = dossiers.find(d => 
+    const found = visibleDossiers.find(d => 
       d.id.toUpperCase() === query || 
       d.orderNumber.toUpperCase() === query ||
       d.fileHashSha256.toUpperCase() === query
@@ -248,7 +262,7 @@ export default function App() {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800">
                 <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">Dossiês Ativos</span>
-                <span className="text-2xl font-black text-white mt-1 block">{dossiers.length}</span>
+                <span className="text-2xl font-black text-white mt-1 block">{visibleDossiers.length}</span>
                 <span className="text-[10px] text-emerald-400 mt-0.5 block">Arquivados e indexados</span>
               </div>
 
@@ -285,7 +299,7 @@ export default function App() {
               </div>
 
               <DossierList
-                dossiers={dossiers}
+                dossiers={visibleDossiers}
                 onSelectDossier={(d) => setSelectedDossier(d)}
                 onOpenDispute={(d) => setDisputeDossier(d)}
                 onNewDossier={handleStartRecording}

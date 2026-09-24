@@ -85,6 +85,7 @@ export interface Dossier {
   timezone?: string;
   timezoneOffsetFormatted?: string;
   onlinePersisted?: boolean;
+  ownerUserId?: string;
 }
 
 export interface RecordingStepDef {

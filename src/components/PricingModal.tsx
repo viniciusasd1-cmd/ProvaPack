@@ -32,11 +32,11 @@ export const PricingModal: React.FC<PricingModalProps> = ({
       return;
     }
 
-    // 2. Se já autenticado, NÃO ativar plano no navegador (checkout em etapa comercial posterior)
+    // 2. Se já autenticado, NÃO ativar plano no navegador (sem Mercado Pago / gateway nesta etapa)
     if (tierId === 'free') {
       setNotice('Sua conta já possui 10 ProvaPacks gratuitos válidos garantidos pelo servidor.');
     } else {
-      setNotice('A integração de checkout (PIX / Cartão) está em fase final de homologação (MVP-02B). Sua conta atual já está ativa com os 10 envios gratuitos!');
+      setNotice('Pagamento será conectado na próxima etapa.');
     }
 
     setTimeout(() => {

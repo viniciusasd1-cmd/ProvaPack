@@ -1,15 +1,47 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabaseAuth, isSupabaseAuthConfigured } from '../lib/supabaseAuth';
+import { authenticatedFetch } from '../lib/apiClient';
 
-export interface ServerSellerProfile {
+export interface UserAccount {
+  planCode: 'free' | 'pro' | 'volume';
+  subscriptionStatus: 'active' | 'pending' | 'past_due' | 'cancelled';
+  freeLimit: number;
+  freeUsed: number;
+  monthlyLimit: number | null;
+  monthlyUsed: number;
+  extraCredits: number;
+  remaining: number;
+  unlimited: boolean;
+  currentPeriodStart: string | null;
+  currentPeriodEnd: string | null;
+}
+
+// Interface de compatibilidade com componentes que consom o formato de exibição visual
+export interface VisualSellerProfile {
   userId: string;
   email: string;
-  plan: string;
+  plan: 'Gratuito (10 envios)' | 'Pro (50 envios)' | 'Alto Volume (Ilimitado)';
   freeDossiersRemaining: number;
   monthlyLimit: number;
   usedThisMonth: number;
   extraCredits: number;
+}
+
+function mapAccountToVisualProfile(userId: string, email: string, account: UserAccount): VisualSellerProfile {
+  let visualPlan: VisualSellerProfile['plan'] = 'Gratuito (10 envios)';
+  if (account.planCode === 'pro') visualPlan = 'Pro (50 envios)';
+  if (account.planCode === 'volume') visualPlan = 'Alto Volume (Ilimitado)';
+
+  return {
+    userId,
+    email,
+    plan: visualPlan,
+    freeDossiersRemaining: account.remaining,
+    monthlyLimit: account.monthlyLimit ?? 10,
+    usedThisMonth: account.monthlyUsed,
+    extraCredits: account.extraCredits
+  };
 }
 
 interface AuthContextType {
@@ -17,12 +49,14 @@ interface AuthContextType {
   session: Session | null;
   isAuthenticated: boolean;
   authLoading: boolean;
-  profile: ServerSellerProfile | null;
+  account: UserAccount | null;
+  profile: VisualSellerProfile | null;
   sendOtp: (email: string) => Promise<{ success: boolean; error?: string }>;
   verifyOtp: (email: string, code: string) => Promise<{ success: boolean; error?: string }>;
   signOut: () => Promise<void>;
   refreshSession: () => Promise<void>;
-  refreshProfile: () => Promise<ServerSellerProfile | null>;
+  refreshAccount: () => Promise<UserAccount | null>;
+  refreshProfile: () => Promise<VisualSellerProfile | null>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -31,83 +65,80 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [authLoading, setAuthLoading] = useState<boolean>(true);
-  const [profile, setProfile] = useState<ServerSellerProfile | null>(null);
+  const [account, setAccount] = useState<UserAccount | null>(null);
+  const [profile, setProfile] = useState<VisualSellerProfile | null>(null);
 
-  // Consulta autoritativa de plano e créditos no backend
-  const fetchProfile = useCallback(async (token: string): Promise<ServerSellerProfile | null> => {
+  // Consulta autoritativa em /api/account/me via JWT oficial Supabase
+  const fetchAccount = useCallback(async (): Promise<UserAccount | null> => {
     try {
-      const res = await fetch('/api/user/profile', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      const res = await authenticatedFetch('/api/account/me');
       if (!res.ok) {
-        console.warn('[ProvaPack Auth] Falha ao consultar perfil no servidor:', res.status);
+        if (res.status === 401) {
+          setAccount(null);
+          setProfile(null);
+        }
         return null;
       }
+
       const data = await res.json();
-      if (data && data.success && data.profile) {
-        setProfile(data.profile);
-        return data.profile;
+      if (data && data.account && data.user) {
+        setAccount(data.account);
+        const mapped = mapAccountToVisualProfile(data.user.id, data.user.email, data.account);
+        setProfile(mapped);
+        return data.account;
       }
       return null;
     } catch (err) {
-      console.warn('[ProvaPack Auth] Erro de rede ao buscar perfil:', err);
+      console.warn('[ProvaPack Auth] Erro de rede ao consultar /api/account/me:', err);
       return null;
     }
   }, []);
 
-  const refreshProfile = useCallback(async (): Promise<ServerSellerProfile | null> => {
-    if (!session?.access_token) return null;
-    return await fetchProfile(session.access_token);
-  }, [session, fetchProfile]);
+  const refreshAccount = useCallback(async (): Promise<UserAccount | null> => {
+    return await fetchAccount();
+  }, [fetchAccount]);
 
-  // Inicialização e monitoramento de estado de autenticação Supabase
+  const refreshProfile = useCallback(async (): Promise<VisualSellerProfile | null> => {
+    const acc = await fetchAccount();
+    if (acc && user) {
+      return mapAccountToVisualProfile(user.id, user.email || '', acc);
+    }
+    return null;
+  }, [fetchAccount, user]);
+
+  // Inicialização exclusiva via Supabase Auth oficial (sem fallback sintético)
   useEffect(() => {
     let isMounted = true;
 
     async function initAuth() {
       try {
-        if (isSupabaseAuthConfigured) {
-          const { data: { session: initialSession }, error } = await supabaseAuth.auth.getSession();
-          if (error) {
-            console.warn('[ProvaPack Auth] Erro ao recuperar sessão:', error.message);
+        if (!isSupabaseAuthConfigured) {
+          if (process.env.NODE_ENV !== 'production') {
+            console.info('[ProvaPack Auth] VITE_SUPABASE_URL ou VITE_SUPABASE_PUBLISHABLE_KEY não configurados. Autenticação desativada.');
           }
           if (isMounted) {
-            setSession(initialSession);
-            setUser(initialSession?.user ?? null);
-            if (initialSession?.access_token) {
-              fetchProfile(initialSession.access_token);
-            }
+            setUser(null);
+            setSession(null);
+            setAccount(null);
+            setProfile(null);
           }
-        } else {
-          // Fallback se chave pública não estiver configurada no client
-          const savedToken = localStorage.getItem('provapack_backend_session_token');
-          if (savedToken) {
-            const p = await fetchProfile(savedToken);
-            if (p && isMounted) {
-              const syntheticUser: any = {
-                id: p.userId,
-                email: p.email,
-                app_metadata: {},
-                user_metadata: {},
-                aud: 'authenticated',
-                created_at: new Date().toISOString()
-              };
-              const syntheticSession: any = {
-                access_token: savedToken,
-                token_type: 'bearer',
-                user: syntheticUser
-              };
-              setUser(syntheticUser);
-              setSession(syntheticSession);
-            } else {
-              localStorage.removeItem('provapack_backend_session_token');
-            }
+          return;
+        }
+
+        const { data: { session: initialSession }, error } = await supabaseAuth.auth.getSession();
+        if (error) {
+          console.warn('[ProvaPack Auth] Erro ao recuperar sessão do Supabase:', error.message);
+        }
+
+        if (isMounted) {
+          setSession(initialSession);
+          setUser(initialSession?.user ?? null);
+          if (initialSession?.user) {
+            fetchAccount();
           }
         }
       } catch (err) {
-        console.warn('[ProvaPack Auth] Erro na inicialização de Auth:', err);
+        console.warn('[ProvaPack Auth] Falha ao inicializar autenticação:', err);
       } finally {
         if (isMounted) {
           setAuthLoading(false);
@@ -117,16 +148,17 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     initAuth();
 
-    // Listener de mudanças na sessão
+    // Listener de eventos do Supabase Auth
     let subscription: { unsubscribe: () => void } | null = null;
     if (isSupabaseAuthConfigured) {
       const { data } = supabaseAuth.auth.onAuthStateChange(async (_event, newSession) => {
         if (!isMounted) return;
         setSession(newSession);
         setUser(newSession?.user ?? null);
-        if (newSession?.access_token) {
-          await fetchProfile(newSession.access_token);
+        if (newSession?.user) {
+          await fetchAccount();
         } else {
+          setAccount(null);
           setProfile(null);
         }
         setAuthLoading(false);
@@ -140,111 +172,77 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         subscription.unsubscribe();
       }
     };
-  }, [fetchProfile]);
+  }, [fetchAccount]);
 
-  // Enviar código OTP para o e-mail informado
+  // Enviar código OTP exclusivamente via Supabase Auth
   const sendOtp = async (email: string): Promise<{ success: boolean; error?: string }> => {
     const cleanEmail = email.trim().toLowerCase();
     if (!cleanEmail || !cleanEmail.includes('@')) {
       return { success: false, error: 'Por favor, informe um endereço de e-mail válido.' };
     }
 
-    try {
-      if (isSupabaseAuthConfigured) {
-        const { error } = await supabaseAuth.auth.signInWithOtp({
-          email: cleanEmail,
-          options: {
-            shouldCreateUser: true
-          }
-        });
+    if (!isSupabaseAuthConfigured) {
+      return {
+        success: false,
+        error: 'Serviço de autenticação não configurado no cliente. Verifique as variáveis de ambiente.'
+      };
+    }
 
-        if (error) {
-          console.warn('[ProvaPack Auth] Erro ao enviar OTP via Supabase:', error.message);
-          return { success: false, error: error.message };
+    try {
+      const { error } = await supabaseAuth.auth.signInWithOtp({
+        email: cleanEmail,
+        options: {
+          shouldCreateUser: true
         }
-        return { success: true };
-      } else {
-        // Fallback via backend proxy seguro se chave publishable não estiver no build Vite
-        const res = await fetch('/api/auth/send-otp', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: cleanEmail })
-        });
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-          return { success: false, error: data.error || 'Erro ao enviar código de acesso.' };
-        }
-        return { success: true };
+      });
+
+      if (error) {
+        console.warn('[ProvaPack Auth] Erro ao solicitar OTP:', error.message);
+        return { success: false, error: error.message };
       }
+
+      return { success: true };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Falha de conexão ao enviar código.' };
     }
   };
 
-  // Verificar código OTP informado pelo usuário
+  // Verificar código OTP exclusivamente via Supabase Auth
   const verifyOtp = async (email: string, code: string): Promise<{ success: boolean; error?: string }> => {
     const cleanEmail = email.trim().toLowerCase();
     const cleanCode = code.trim().replace(/\D/g, '');
 
     if (!cleanCode || cleanCode.length < 6) {
-      return { success: false, error: 'O código de confirmação deve ter pelo menos 6 dígitos.' };
+      return { success: false, error: 'O código de confirmação deve ter 6 dígitos.' };
+    }
+
+    if (!isSupabaseAuthConfigured) {
+      return {
+        success: false,
+        error: 'Serviço de autenticação não configurado no cliente.'
+      };
     }
 
     try {
-      if (isSupabaseAuthConfigured) {
-        const { data, error } = await supabaseAuth.auth.verifyOtp({
-          email: cleanEmail,
-          token: cleanCode,
-          type: 'email'
-        });
+      const { data, error } = await supabaseAuth.auth.verifyOtp({
+        email: cleanEmail,
+        token: cleanCode,
+        type: 'email'
+      });
 
-        if (error) {
-          console.warn('[ProvaPack Auth] Código OTP inválido ou expirado:', error.message);
-          return { success: false, error: 'Código incorreto ou expirado. Tente novamente.' };
-        }
+      if (error) {
+        console.warn('[ProvaPack Auth] Falha na verificação de OTP:', error.message);
+        return { success: false, error: 'Código incorreto ou expirado. Verifique e tente novamente.' };
+      }
 
-        if (data.session) {
-          setSession(data.session);
-          setUser(data.user);
-          if (data.session.access_token) {
-            await fetchProfile(data.session.access_token);
-          }
-          return { success: true };
-        }
-        return { success: true };
-      } else {
-        // Fallback backend proxy
-        const res = await fetch('/api/auth/verify-otp', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: cleanEmail, token: cleanCode })
-        });
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-          return { success: false, error: data.error || 'Código incorreto ou expirado.' };
-        }
-
-        if (data.sessionToken && data.user) {
-          localStorage.setItem('provapack_backend_session_token', data.sessionToken);
-          const syntheticUser: any = {
-            id: data.user.id,
-            email: data.user.email,
-            app_metadata: {},
-            user_metadata: {},
-            aud: 'authenticated',
-            created_at: new Date().toISOString()
-          };
-          const syntheticSession: any = {
-            access_token: data.sessionToken,
-            token_type: 'bearer',
-            user: syntheticUser
-          };
-          setUser(syntheticUser);
-          setSession(syntheticSession);
-          await fetchProfile(data.sessionToken);
-        }
+      if (data.session) {
+        setSession(data.session);
+        setUser(data.user);
+        await fetchAccount();
         return { success: true };
       }
+
+      return { success: true };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Falha ao validar o código.' };
     }
@@ -255,26 +253,24 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (isSupabaseAuthConfigured) {
         await supabaseAuth.auth.signOut();
       }
-      localStorage.removeItem('provapack_backend_session_token');
+    } catch (err) {
+      console.warn('[ProvaPack Auth] Erro ao encerrar sessão:', err);
+    } finally {
       setUser(null);
       setSession(null);
+      setAccount(null);
       setProfile(null);
-    } catch (err) {
-      console.warn('[ProvaPack Auth] Erro ao sair da conta:', err);
     }
   };
 
   const refreshSession = async (): Promise<void> => {
+    if (!isSupabaseAuthConfigured) return;
     try {
-      if (isSupabaseAuthConfigured) {
-        const { data: { session: refreshed } } = await supabaseAuth.auth.refreshSession();
-        setSession(refreshed);
-        setUser(refreshed?.user ?? null);
-        if (refreshed?.access_token) {
-          await fetchProfile(refreshed.access_token);
-        }
-      } else if (session?.access_token) {
-        await fetchProfile(session.access_token);
+      const { data: { session: refreshed } } = await supabaseAuth.auth.refreshSession();
+      setSession(refreshed);
+      setUser(refreshed?.user ?? null);
+      if (refreshed?.user) {
+        await fetchAccount();
       }
     } catch (err) {
       console.warn('[ProvaPack Auth] Erro ao atualizar sessão:', err);
@@ -288,11 +284,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         session,
         isAuthenticated: Boolean(user && session),
         authLoading,
+        account,
         profile,
         sendOtp,
         verifyOtp,
         signOut,
         refreshSession,
+        refreshAccount,
         refreshProfile
       }}
     >

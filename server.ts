@@ -1,20 +1,53 @@
-import express, { Request, Response } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 
 dotenv.config();
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
-// Trust reverse proxy (Hostinger Nginx/Passenger)
+// Trust reverse proxy (Hostinger Nginx/Passenger/Cloud Run)
 app.set('trust proxy', 1);
 
+// Security Headers (P17)
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false
+}));
+
 app.use(express.json({ limit: '30mb' }));
+
+// Rate Limiters (P17)
+const dossierLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Muitas requisições de registro. Tente novamente em alguns minutos.' }
+});
+
+const accountLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Muitas consultas à conta. Tente novamente em alguns minutos.' }
+});
+
+const aiLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Muitas requisições de IA. Aguarde um instante.' }
+});
 
 // Lazy Gemini Client
 let aiClient: GoogleGenAI | null = null;
@@ -27,11 +60,11 @@ function getAI(): GoogleGenAI | null {
   return aiClient;
 }
 
-// Lazy Supabase Client (exclusively uses SUPABASE_SECRET_KEY prioritarily, with SUPABASE_SERVICE_ROLE_KEY fallback)
+// Lazy Supabase Client
+// Exclusivamente chaves de serviço/backend: SUPABASE_SECRET_KEY prioritariamente, SUPABASE_SERVICE_ROLE_KEY como fallback de compatibilidade
 let supabaseClient: SupabaseClient | null = null;
 function getSupabase(): SupabaseClient | null {
   const url = process.env.SUPABASE_URL;
-  // Prioridade: SUPABASE_SECRET_KEY -> SUPABASE_SERVICE_ROLE_KEY legado
   const key = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) return null;
   if (!supabaseClient) {
@@ -45,300 +78,217 @@ function getSupabase(): SupabaseClient | null {
   return supabaseClient;
 }
 
-// In-memory profile & session cache (resilience against unapplied remote migrations or offline modes)
-const memoryProfiles = new Map<string, {
-  userId: string;
-  email: string;
-  plan: string;
-  freeDossiersRemaining: number;
-  monthlyLimit: number;
-  usedThisMonth: number;
-  extraCredits: number;
-}>();
-
-const memoryDossiers = new Map<string, any>();
-
-const otpMemoryCache = new Map<string, {
-  code: string;
-  userId: string;
-  expiresAt: number;
-}>();
-
 interface AuthUser {
   id: string;
   email: string;
 }
 
-// Extrai e valida o usuário autenticado via Bearer JWT do Supabase Auth
+// Validação estrita de usuário via Supabase Auth (P0, P2)
+// Aceita EXCLUSIVAMENTE Authorization: Bearer <SUPABASE_ACCESS_TOKEN> validado por supabase.auth.getUser(token)
+// NENHUM fallback sintético, NENHUM base64, NENHUM token em memória
 async function getAuthenticatedUser(req: Request): Promise<AuthUser | null> {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return null;
   }
 
-  const token = authHeader.replace('Bearer ', '').trim();
+  const token = authHeader.slice(7).trim();
   if (!token) return null;
 
-  // 1. Tentar validação direta via Supabase Auth
   const supabase = getSupabase();
-  if (supabase) {
-    try {
-      const { data: { user }, error } = await supabase.auth.getUser(token);
-      if (!error && user && user.id) {
-        return {
-          id: user.id,
-          email: user.email || 'vendedor@provapack.com'
-        };
-      }
-    } catch {
-      // Ignora e tenta checagem de token de contingência
-    }
-  }
+  if (!supabase) return null;
 
-  // 2. Token de sessão de contingência gerado pelo proxy backend
-  if (token.startsWith('pp_session_')) {
-    try {
-      const decoded = Buffer.from(token.replace('pp_session_', ''), 'base64').toString('utf-8');
-      const [id, email] = decoded.split(':');
-      if (id && email) {
-        return { id, email };
-      }
-    } catch {
+  try {
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    if (error || !user || !user.id) {
       return null;
     }
+    return {
+      id: user.id,
+      email: user.email || ''
+    };
+  } catch {
+    return null;
   }
-
-  return null;
 }
 
-// Consulta ou inicializa o perfil do vendedor com exatamente 10 créditos gratuitos uma única vez
-async function getUserSellerProfile(userId: string, email: string) {
-  const supabase = getSupabase();
-
-  if (supabase) {
-    try {
-      const { data: existing, error } = await supabase
-        .from('seller_profiles')
-        .select('*')
-        .eq('id', userId)
-        .maybeSingle();
-
-      if (!error && existing) {
-        return {
-          userId: existing.id,
-          email: existing.email || email,
-          plan: existing.plan || 'Gratuito (10 envios)',
-          freeDossiersRemaining: Number(existing.free_dossiers_remaining ?? 10),
-          monthlyLimit: Number(existing.monthly_limit ?? 10),
-          usedThisMonth: Number(existing.used_this_month ?? 0),
-          extraCredits: Number(existing.extra_credits ?? 0)
-        };
-      }
-
-      // Se o perfil ainda não existe, cria com exatamente 10 ProvaPacks gratuitos
-      if (!existing && (!error || error.code === 'PGRST116')) {
-        const initial = {
-          id: userId,
-          email,
-          plan: 'Gratuito (10 envios)',
-          free_dossiers_remaining: 10,
-          monthly_limit: 10,
-          used_this_month: 0,
-          extra_credits: 0
-        };
-
-        const { error: insertErr } = await supabase
-          .from('seller_profiles')
-          .insert(initial);
-
-        if (!insertErr) {
-          return {
-            userId: initial.id,
-            email: initial.email,
-            plan: initial.plan,
-            freeDossiersRemaining: initial.free_dossiers_remaining,
-            monthlyLimit: initial.monthly_limit,
-            usedThisMonth: initial.used_this_month,
-            extraCredits: initial.extra_credits
-          };
-        }
-      }
-    } catch {
-      // Fallback em memória em caso de tabela ainda não provisionada no Supabase
-    }
-  }
-
-  if (!memoryProfiles.has(userId)) {
-    memoryProfiles.set(userId, {
-      userId,
-      email,
-      plan: 'Gratuito (10 envios)',
-      freeDossiersRemaining: 10,
-      monthlyLimit: 10,
-      usedThisMonth: 0,
-      extraCredits: 0
+// Middleware de Autenticação Obrigatória
+async function requireAuth(req: Request, res: Response, next: NextFunction) {
+  const user = await getAuthenticatedUser(req);
+  if (!user) {
+    return res.status(401).json({
+      success: false,
+      code: 'UNAUTHORIZED',
+      error: 'Autenticação necessária. Faça login com seu e-mail para continuar.'
     });
   }
-
-  return memoryProfiles.get(userId)!;
+  (req as any).user = user;
+  next();
 }
 
-// Debita atomicamente 1 crédito de dossiê do vendedor
-async function deductUserQuota(userId: string, profile: any) {
-  const supabase = getSupabase();
-  let newRemaining = Number(profile.freeDossiersRemaining || 0);
-  let newExtra = Number(profile.extraCredits || 0);
-  let newUsed = Number(profile.usedThisMonth || 0) + 1;
-
-  if (newRemaining > 0) {
-    newRemaining -= 1;
-  } else if (newExtra > 0) {
-    newExtra -= 1;
-  }
-
-  if (supabase) {
-    try {
-      await supabase
-        .from('seller_profiles')
-        .update({
-          free_dossiers_remaining: newRemaining,
-          extra_credits: newExtra,
-          used_this_month: newUsed,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', userId);
-    } catch {
-      // Ignora erro de rede e mantém cache atualizado
-    }
-  }
-
-  const updatedProfile = {
-    ...profile,
-    freeDossiersRemaining: newRemaining,
-    extraCredits: newExtra,
-    usedThisMonth: newUsed
-  };
-  memoryProfiles.set(userId, updatedProfile);
-
-  return { newRemaining, newUsed };
-}
-
-// API Routes
+// Health Check
 app.get('/api/health', (req: Request, res: Response) => {
   res.json({ status: 'ok', service: 'ProvaPack API', timestamp: new Date().toISOString() });
 });
 
-// Endpoint autoritativo de consulta de perfil e créditos do usuário logado
-app.get('/api/user/profile', async (req: Request, res: Response) => {
-  const user = await getAuthenticatedUser(req);
-  if (!user) {
-    return res.status(401).json({ success: false, error: 'Usuário não autenticado' });
-  }
-
-  const profile = await getUserSellerProfile(user.id, user.email);
-  return res.json({
-    success: true,
-    profile
-  });
-});
-
-// Envio de OTP para autenticação passwordless
-app.post('/api/auth/send-otp', async (req: Request, res: Response) => {
+// P11 — GET /api/account/me
+// Consulta autoritativa no banco de dados Supabase/PostgreSQL
+app.get('/api/account/me', accountLimiter, requireAuth, async (req: Request, res: Response) => {
   try {
-    const { email } = req.body;
-    if (!email || typeof email !== 'string' || !email.includes('@')) {
-      return res.status(400).json({ success: false, error: 'E-mail inválido.' });
-    }
-
-    const cleanEmail = email.trim().toLowerCase();
+    const user: AuthUser = (req as any).user;
     const supabase = getSupabase();
     if (!supabase) {
-      return res.status(503).json({ success: false, error: 'Serviço de autenticação temporariamente indisponível.' });
+      return res.status(503).json({
+        success: false,
+        code: 'SERVICE_UNAVAILABLE',
+        error: 'Serviço de banco de dados temporariamente indisponível.'
+      });
     }
 
-    // Tentar gerar link/código via Supabase Auth Admin
+    // 1. Tentar executar a função RPC de resumo consolidado
     try {
-      const { data, error } = await supabase.auth.admin.generateLink({
-        type: 'magiclink',
-        email: cleanEmail
+      const { data: summary, error: rpcError } = await supabase.rpc('get_account_summary', {
+        p_user_id: user.id
       });
 
-      if (!error && data?.user) {
-        const otpCode = data.properties?.email_otp || String(Math.floor(100000 + Math.random() * 900000));
-        otpMemoryCache.set(cleanEmail, {
-          code: otpCode,
-          userId: data.user.id,
-          expiresAt: Date.now() + 10 * 60 * 1000
+      if (!rpcError && summary) {
+        return res.json({
+          user: {
+            id: user.id,
+            email: user.email
+          },
+          account: summary
         });
-        return res.json({ success: true, message: 'Código de acesso enviado com sucesso.' });
       }
     } catch {
-      // Continua para fallback
+      // Prossegue para consulta direta às tabelas se a migration da função ainda estiver sendo aplicada
     }
 
-    // Fallback de contingência local se o provedor SMTP do Supabase não estiver ativado
-    const syntheticId = 'usr_' + Buffer.from(cleanEmail).toString('hex').slice(0, 24);
-    const fallbackOtp = '123456';
-    otpMemoryCache.set(cleanEmail, {
-      code: fallbackOtp,
-      userId: syntheticId,
-      expiresAt: Date.now() + 10 * 60 * 1000
-    });
+    // 2. Consulta direta às tabelas no Supabase (sem fallback de memória)
+    const { data: profile, error: profileErr } = await supabase
+      .from('seller_profiles')
+      .select('*')
+      .eq('id', user.id)
+      .maybeSingle();
 
-    return res.json({ success: true, message: 'Código de acesso gerado.' });
+    if (profileErr) {
+      console.error('[Supabase Error] Falha ao consultar seller_profiles:', profileErr.message);
+      return res.status(503).json({
+        success: false,
+        code: 'SERVICE_UNAVAILABLE',
+        error: 'Serviço temporariamente indisponível.'
+      });
+    }
+
+    // Se o perfil ainda não existir (ex: antes do primeiro trigger de auth rodar), cria o registro oficial
+    let currentProfile = profile;
+    if (!currentProfile) {
+      const { data: newProfile, error: insertErr } = await supabase
+        .from('seller_profiles')
+        .insert({
+          id: user.id,
+          email: user.email,
+          plan_code: 'free',
+          subscription_status: 'active',
+          free_credit_limit: 10,
+          extra_credits: 0
+        })
+        .select()
+        .single();
+
+      if (insertErr) {
+        console.error('[Supabase Error] Falha ao provisionar perfil:', insertErr.message);
+        return res.status(503).json({
+          success: false,
+          code: 'SERVICE_UNAVAILABLE',
+          error: 'Serviço temporariamente indisponível.'
+        });
+      }
+      currentProfile = newProfile;
+    }
+
+    // Contar usage_events
+    const { count: freeUsedCount, error: countErr } = await supabase
+      .from('usage_events')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', user.id)
+      .eq('usage_source', 'free');
+
+    const freeUsed = countErr ? 0 : Number(freeUsedCount || 0);
+    const freeLimit = Number(currentProfile.free_credit_limit ?? 10);
+    const extraCredits = Number(currentProfile.extra_credits ?? 0);
+    const remaining = Math.max(0, freeLimit - freeUsed) + extraCredits;
+
+    const account = {
+      planCode: currentProfile.plan_code || 'free',
+      subscriptionStatus: currentProfile.subscription_status || 'active',
+      freeLimit,
+      freeUsed,
+      monthlyLimit: currentProfile.monthly_limit ? Number(currentProfile.monthly_limit) : null,
+      monthlyUsed: 0,
+      extraCredits,
+      remaining,
+      unlimited: currentProfile.plan_code === 'volume',
+      currentPeriodStart: currentProfile.current_period_start || null,
+      currentPeriodEnd: currentProfile.current_period_end || null
+    };
+
+    return res.json({
+      user: {
+        id: user.id,
+        email: user.email
+      },
+      account
+    });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err?.message || 'Erro ao enviar código.' });
+    console.error('Erro em /api/account/me:', err);
+    return res.status(500).json({ success: false, error: 'Erro ao consultar conta.' });
   }
 });
 
-// Validação de código OTP
-app.post('/api/auth/verify-otp', async (req: Request, res: Response) => {
-  try {
-    const { email, token } = req.body;
-    if (!email || !token) {
-      return res.status(400).json({ success: false, error: 'E-mail e código são obrigatórios.' });
-    }
-
-    const cleanEmail = String(email).trim().toLowerCase();
-    const cleanToken = String(token).trim().replace(/\D/g, '');
-
-    const cached = otpMemoryCache.get(cleanEmail);
-    if (cached && cached.expiresAt > Date.now()) {
-      if (cached.code === cleanToken || cleanToken === '123456') {
-        otpMemoryCache.delete(cleanEmail);
-        const sessionToken = 'pp_session_' + Buffer.from(`${cached.userId}:${cleanEmail}`).toString('base64');
-        return res.json({
-          success: true,
-          sessionToken,
-          user: {
-            id: cached.userId,
-            email: cleanEmail
-          }
-        });
-      }
-    }
-
-    const supabase = getSupabase();
-    if (supabase) {
-      const { data, error } = await supabase.auth.verifyOtp({
-        email: cleanEmail,
-        token: cleanToken,
-        type: 'email'
-      });
-
-      if (!error && data?.session) {
-        return res.json({
-          success: true,
-          sessionToken: data.session.access_token,
-          user: data.user
-        });
-      }
-    }
-
-    return res.status(400).json({ success: false, error: 'Código incorreto ou expirado.' });
-  } catch (err: any) {
-    return res.status(500).json({ success: false, error: err?.message || 'Erro ao validar código.' });
+// Endpoint legado /api/user/profile com compatibilidade transparente direcionando para a autoridade
+app.get('/api/user/profile', requireAuth, async (req: Request, res: Response) => {
+  const user: AuthUser = (req as any).user;
+  const supabase = getSupabase();
+  if (!supabase) {
+    return res.status(503).json({ success: false, error: 'Serviço indisponível.' });
   }
+
+  const { data: profile, error } = await supabase
+    .from('seller_profiles')
+    .select('*')
+    .eq('id', user.id)
+    .maybeSingle();
+
+  if (error || !profile) {
+    return res.status(503).json({ success: false, error: 'Perfil não encontrado ou indisponível.' });
+  }
+
+  const { count: freeCount } = await supabase
+    .from('usage_events')
+    .select('*', { count: 'exact', head: true })
+    .eq('user_id', user.id)
+    .eq('usage_source', 'free');
+
+  const freeUsed = Number(freeCount || 0);
+  const remaining = Math.max(0, Number(profile.free_credit_limit || 10) - freeUsed) + Number(profile.extra_credits || 0);
+
+  let visualPlan = 'Gratuito (10 envios)';
+  if (profile.plan_code === 'pro') visualPlan = 'Pro (50 envios)';
+  if (profile.plan_code === 'volume') visualPlan = 'Alto Volume (Ilimitado)';
+
+  return res.json({
+    success: true,
+    profile: {
+      userId: profile.id,
+      email: profile.email || user.email,
+      plan: visualPlan,
+      freeDossiersRemaining: remaining,
+      monthlyLimit: profile.monthly_limit || 10,
+      usedThisMonth: freeUsed,
+      extraCredits: profile.extra_credits || 0
+    }
+  });
 });
 
 // Atomic Server Time Endpoint for forensic timestamp validation
@@ -372,19 +322,13 @@ app.get('/api/time', (req: Request, res: Response) => {
   });
 });
 
-// Register dossier (Strictly immutable & idempotent: insert-only with SHA-256 validation & backend authorization)
-app.post('/api/dossiers', async (req: Request, res: Response) => {
+// P9 & P10 — POST /api/dossiers
+// Registro de dossiê estritamente transacional e atômico via Supabase RPC register_provapack_with_usage
+app.post('/api/dossiers', dossierLimiter, requireAuth, async (req: Request, res: Response) => {
   try {
-    // 0. Autenticação obrigatória do usuário (Backend é a autoridade)
-    const user = await getAuthenticatedUser(req);
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        error: 'Autenticação necessária. Identifique-se com seu e-mail para registrar o dossiê.'
-      });
-    }
-
+    const user: AuthUser = (req as any).user;
     const dossier = req.body;
+
     if (!dossier || (!dossier.id && !dossier.public_id && !dossier.recordingId)) {
       return res.status(400).json({ success: false, error: 'Identificador do dossiê é obrigatório' });
     }
@@ -406,152 +350,186 @@ app.post('/api/dossiers', async (req: Request, res: Response) => {
     if (!supabase) {
       return res.status(503).json({
         success: false,
+        code: 'SERVICE_UNAVAILABLE',
         error: 'Registro online temporariamente indisponível'
       });
     }
 
-    // Normalized record for Supabase (NO sensitive customer personal data like buyer CPF, card, address)
-    const payload = {
-      user_id: user.id,
-      public_id: publicId,
-      recording_id: recordingId,
-      marketplace: dossier.marketplace || 'Outros',
-      order_number: String(dossier.order_number || dossier.orderNumber || '').trim(),
-      tracking_code: dossier.tracking_code || dossier.trackingCode || null,
-      product_name: String(dossier.product_name || dossier.productName || '').trim(),
-      serial_number: dossier.serial_number || dossier.serialNumber || null,
-      recorded_at: dossier.recorded_at || dossier.recordedAt || new Date().toISOString(),
-      started_at_utc: dossier.started_at_utc || dossier.startedAtUtc || null,
-      ended_at_utc: dossier.ended_at_utc || dossier.endedAtUtc || null,
-      timezone: dossier.timezone || 'America/Sao_Paulo',
-      time_source: dossier.time_source || dossier.timeSource || 'DEVICE_WITH_SERVER_REFERENCE',
-      duration_seconds: Number(dossier.duration_seconds || dossier.durationSeconds || 0),
-      original_sha256: originalSha256,
-      processed_sha256: processedSha256,
-      file_size_bytes: Number(dossier.file_size_bytes || dossier.fileSizeBytes || 0),
-      status: dossier.status || 'validado'
-    };
+    // Execução da função atômica PostgreSQL
+    const { data: rpcResult, error: rpcError } = await supabase.rpc('register_provapack_with_usage', {
+      p_user_id: user.id,
+      p_dossier_id: publicId,
+      p_recording_id: recordingId,
+      p_marketplace: dossier.marketplace || 'Outros',
+      p_order_number: String(dossier.order_number || dossier.orderNumber || '').trim(),
+      p_tracking_code: dossier.tracking_code || dossier.trackingCode || null,
+      p_product_name: String(dossier.product_name || dossier.productName || '').trim(),
+      p_serial_number: dossier.serial_number || dossier.serialNumber || null,
+      p_recorded_at: dossier.recorded_at || dossier.recordedAt || new Date().toISOString(),
+      p_started_at_utc: dossier.started_at_utc || dossier.startedAtUtc || null,
+      p_ended_at_utc: dossier.ended_at_utc || dossier.endedAtUtc || null,
+      p_timezone: dossier.timezone || 'America/Sao_Paulo',
+      p_time_source: dossier.time_source || dossier.timeSource || 'DEVICE_WITH_SERVER_REFERENCE',
+      p_duration_seconds: Number(dossier.duration_seconds || dossier.durationSeconds || 0),
+      p_original_sha256: originalSha256,
+      p_processed_sha256: processedSha256,
+      p_file_size_bytes: Number(dossier.file_size_bytes || dossier.fileSizeBytes || 0),
+      p_status: dossier.status || 'validado'
+    });
 
-    // 1. Verificar se public_id já existe para garantir imutabilidade e idempotência
-    let existing: any = null;
-    const { data: dbExisting, error: queryError } = await supabase
-      .from('provapacks')
-      .select('public_id, recording_id, original_sha256, processed_sha256, recorded_at')
-      .eq('public_id', publicId)
-      .maybeSingle();
+    if (rpcError) {
+      const errMsg = rpcError.message || '';
 
-    if (queryError) {
-      if (queryError.code === 'PGRST205') {
-        // Tabela provapacks ainda não foi criada no banco remoto: fallback seguro em memória
-        existing = memoryDossiers.get(publicId) || null;
-      } else {
-        console.error('[Supabase Erro] Falha ao verificar registro existente:', queryError);
-        return res.status(500).json({
+      // Regra P10: Sem crédito retorna HTTP 402 NO_CREDITS
+      if (errMsg.includes('NO_CREDITS')) {
+        return res.status(402).json({
           success: false,
-          error: 'Registro online temporariamente indisponível'
+          code: 'NO_CREDITS',
+          error: 'Você não possui envios disponíveis.'
         });
       }
-    } else {
-      existing = dbExisting;
-    }
 
-    if (existing) {
-      // Se public_id já existe e os hashes e recording_id são exatamente os mesmos:
-      // Considerar retry idempotente -> retornar success true sem alterar o registro e sem debitar cota
-      const isIdempotentMatch =
-        existing.recording_id === recordingId &&
-        existing.original_sha256 === originalSha256 &&
-        existing.processed_sha256 === processedSha256;
-
-      if (isIdempotentMatch) {
-        return res.json({
-          success: true,
-          dossierId: publicId,
-          persistedToSupabase: true,
-          idempotent: true
-        });
-      } else {
-        // Se public_id já existe com dados diferentes: HTTP 409
+      if (errMsg.includes('DOSSIER_CONFLICT') || rpcError.code === '23505') {
         return res.status(409).json({
           success: false,
           error: 'Registro já existe e não pode ser alterado.'
         });
       }
-    }
 
-    // 2. Verificar cota do vendedor no backend antes de permitir inserção
-    const userProfile = await getUserSellerProfile(user.id, user.email);
-    const isUnlimited = userProfile.plan.includes('Alto Volume') || userProfile.monthlyLimit >= 9000;
-    const hasRemainingQuota = (userProfile.freeDossiersRemaining > 0) || (userProfile.extraCredits > 0) || isUnlimited;
-
-    if (!hasRemainingQuota) {
-      return res.status(403).json({
-        success: false,
-        error: 'Cota de dossiês esgotada. Faça upgrade do seu plano para continuar gerando dossiês.'
-      });
-    }
-
-    // 3. Se public_id não existe: INSERT (insert-only, imutável)
-    const { error: insertError } = await supabase
-      .from('provapacks')
-      .insert(payload);
-
-    if (insertError) {
-      if (insertError.code === 'PGRST205') {
-        memoryDossiers.set(publicId, {
-          ...payload,
-          created_at: new Date().toISOString()
+      if (errMsg.includes('SUBSCRIPTION_INACTIVE')) {
+        return res.status(402).json({
+          success: false,
+          code: 'SUBSCRIPTION_INACTIVE',
+          error: 'Sua assinatura não está ativa. Renove seu plano para continuar.'
         });
-        memoryDossiers.set(recordingId, {
-          ...payload,
-          created_at: new Date().toISOString()
-        });
-      } else if (insertError.code === '23505') {
-        // Concorrência / conflito de chave única
-        const { data: retryCheck } = await supabase
+      }
+
+      // Se a função RPC não foi criada ainda no Supabase remoto (ex: antes da migration),
+      // faz a verificação direta nas tabelas sem memória
+      if (rpcError.code === 'PGRST202' || rpcError.code === '42883') {
+        // 1. Checar se já existe
+        const { data: existingPack } = await supabase
           .from('provapacks')
           .select('public_id, recording_id, original_sha256, processed_sha256')
           .eq('public_id', publicId)
           .maybeSingle();
 
-        if (
-          retryCheck &&
-          retryCheck.recording_id === recordingId &&
-          retryCheck.original_sha256 === originalSha256 &&
-          retryCheck.processed_sha256 === processedSha256
-        ) {
-          return res.json({
-            success: true,
-            dossierId: publicId,
-            persistedToSupabase: true,
-            idempotent: true
+        if (existingPack) {
+          if (
+            existingPack.recording_id === recordingId &&
+            existingPack.original_sha256 === originalSha256 &&
+            existingPack.processed_sha256 === processedSha256
+          ) {
+            return res.json({
+              success: true,
+              dossierId: publicId,
+              persistedToSupabase: true,
+              idempotent: true
+            });
+          }
+          return res.status(409).json({
+            success: false,
+            error: 'Registro já existe e não pode ser alterado.'
           });
         }
 
-        return res.status(409).json({
-          success: false,
-          error: 'Registro já existe e não pode ser alterado.'
+        // 2. Checar cota diretamente em seller_profiles
+        const { data: profile } = await supabase
+          .from('seller_profiles')
+          .select('*')
+          .eq('id', user.id)
+          .maybeSingle();
+
+        const { count: freeEvents } = await supabase
+          .from('usage_events')
+          .select('*', { count: 'exact', head: true })
+          .eq('user_id', user.id)
+          .eq('usage_source', 'free');
+
+        const freeUsed = Number(freeEvents || 0);
+        const freeLimit = Number(profile?.free_credit_limit ?? 10);
+        const extraCredits = Number(profile?.extra_credits ?? 0);
+        const hasCredits = (freeUsed < freeLimit) || (extraCredits > 0) || (profile?.plan_code === 'volume');
+
+        if (!hasCredits) {
+          return res.status(402).json({
+            success: false,
+            code: 'NO_CREDITS',
+            error: 'Você não possui envios disponíveis.'
+          });
+        }
+
+        // Inserir registro
+        const payload = {
+          user_id: user.id,
+          owner_user_id: user.id,
+          public_id: publicId,
+          recording_id: recordingId,
+          marketplace: dossier.marketplace || 'Outros',
+          order_number: String(dossier.order_number || dossier.orderNumber || '').trim(),
+          tracking_code: dossier.tracking_code || dossier.trackingCode || null,
+          product_name: String(dossier.product_name || dossier.productName || '').trim(),
+          serial_number: dossier.serial_number || dossier.serialNumber || null,
+          recorded_at: dossier.recorded_at || dossier.recordedAt || new Date().toISOString(),
+          started_at_utc: dossier.started_at_utc || dossier.startedAtUtc || null,
+          ended_at_utc: dossier.ended_at_utc || dossier.endedAtUtc || null,
+          timezone: dossier.timezone || 'America/Sao_Paulo',
+          time_source: dossier.time_source || dossier.timeSource || 'DEVICE_WITH_SERVER_REFERENCE',
+          duration_seconds: Number(dossier.duration_seconds || dossier.durationSeconds || 0),
+          original_sha256: originalSha256,
+          processed_sha256: processedSha256,
+          file_size_bytes: Number(dossier.file_size_bytes || dossier.fileSizeBytes || 0),
+          status: dossier.status || 'validado'
+        };
+
+        const { error: insertErr } = await supabase.from('provapacks').insert(payload);
+        if (insertErr) {
+          console.error('[Supabase Error] Falha ao inserir provapack:', insertErr);
+          return res.status(503).json({
+            success: false,
+            code: 'SERVICE_UNAVAILABLE',
+            error: 'Registro online temporariamente indisponível'
+          });
+        }
+
+        // Inserir usage_event
+        const usageSource = (freeUsed < freeLimit) ? 'free' : 'extra';
+        await supabase.from('usage_events').insert({
+          user_id: user.id,
+          dossier_id: publicId,
+          usage_source: usageSource
         });
-      } else {
-        console.error('[Supabase Erro] Falha ao inserir no Supabase:', insertError);
-        return res.status(500).json({
-          success: false,
-          error: 'Registro online temporariamente indisponível'
+
+        if (usageSource === 'extra') {
+          await supabase.from('seller_profiles').update({
+            extra_credits: Math.max(0, extraCredits - 1)
+          }).eq('id', user.id);
+        }
+
+        return res.json({
+          success: true,
+          dossierId: publicId,
+          persistedToSupabase: true,
+          idempotent: false,
+          remainingCredits: Math.max(0, freeLimit - freeUsed - 1) + extraCredits
         });
       }
-    } else {
-      memoryDossiers.set(publicId, payload);
-      memoryDossiers.set(recordingId, payload);
+
+      console.error('[Supabase Error] Falha na execução da RPC:', rpcError);
+      return res.status(503).json({
+        success: false,
+        code: 'SERVICE_UNAVAILABLE',
+        error: 'Registro online temporariamente indisponível'
+      });
     }
 
-    // 4. Debitar atomicamente 1 crédito no backend após sucesso da persistência
-    const { newRemaining } = await deductUserQuota(user.id, userProfile);
-
-    return res.json({ 
-      success: true, 
+    return res.json({
+      success: true,
       dossierId: publicId,
       persistedToSupabase: true,
-      remainingCredits: newRemaining
+      idempotent: Boolean(rpcResult?.idempotent),
+      remainingCredits: rpcResult?.remaining,
+      account: rpcResult?.account
     });
   } catch (err: any) {
     console.error('Erro ao salvar dossiê:', err);
@@ -559,7 +537,7 @@ app.post('/api/dossiers', async (req: Request, res: Response) => {
   }
 });
 
-// Get dossier by ID for public verification (strictly via Supabase backend confirmation)
+// Consulta pública de dossiê (verificação técnica independente)
 app.get('/api/dossiers/:id', async (req: Request, res: Response) => {
   try {
     const rawId = req.params.id ? req.params.id.trim() : '';
@@ -572,75 +550,62 @@ app.get('/api/dossiers/:id', async (req: Request, res: Response) => {
       return res.status(503).json({ success: false, error: 'Serviço de verificação temporariamente indisponível' });
     }
 
-    try {
-      let data: any = null;
-      const { data: dbData, error } = await supabase
-        .from('provapacks')
-        .select('*')
-        .or(`public_id.eq.${rawId},recording_id.eq.${rawId}`)
-        .maybeSingle();
+    const { data, error } = await supabase
+      .from('provapacks')
+      .select('*')
+      .or(`public_id.eq.${rawId},recording_id.eq.${rawId}`)
+      .maybeSingle();
 
-      if (error) {
-        if (error.code === 'PGRST205') {
-          data = memoryDossiers.get(rawId) || null;
-        } else {
-          console.warn('[Supabase Aviso] Erro na consulta ao Supabase:', error.message || error);
-          return res.status(500).json({ success: false, error: 'Erro ao consultar registro.' });
-        }
-      } else {
-        data = dbData;
-      }
-
-      if (data) {
-        return res.json({
-          success: true,
-          dossier: {
-            id: data.public_id,
-            public_id: data.public_id,
-            recordingId: data.recording_id,
-            recording_id: data.recording_id,
-            marketplace: data.marketplace,
-            orderNumber: data.order_number,
-            order_number: data.order_number,
-            trackingCode: data.tracking_code,
-            tracking_code: data.tracking_code,
-            productName: data.product_name,
-            product_name: data.product_name,
-            serialNumber: data.serial_number,
-            serial_number: data.serial_number,
-            recordedAt: data.recorded_at,
-            recorded_at: data.recorded_at,
-            durationSeconds: data.duration_seconds,
-            duration_seconds: data.duration_seconds,
-            originalSha256: data.original_sha256,
-            original_sha256: data.original_sha256,
-            processedSha256: data.processed_sha256,
-            processed_sha256: data.processed_sha256,
-            fileHashSha256: data.processed_sha256,
-            fileSizeBytes: data.file_size_bytes,
-            file_size_bytes: data.file_size_bytes,
-            timezone: data.timezone,
-            timeSource: data.time_source,
-            status: data.status,
-            verificationStatus: 'Registro online confirmado',
-            created_at: data.created_at
-          }
-        });
-      }
-    } catch (supabaseQueryErr: any) {
-      console.warn('[Supabase Aviso] Erro na consulta ao Supabase:', supabaseQueryErr?.message || supabaseQueryErr);
-      return res.status(500).json({ success: false, error: 'Erro ao consultar registro.' });
+    if (error) {
+      console.warn('[Supabase Error] Erro na consulta ao Supabase:', error.message);
+      return res.status(503).json({ success: false, error: 'Erro ao consultar registro no banco de dados.' });
     }
 
-    // Registro não encontrado no Supabase
-    return res.status(404).json({ success: false, error: 'Registro não encontrado' });
+    if (!data) {
+      return res.status(404).json({ success: false, error: 'Registro não encontrado' });
+    }
+
+    return res.json({
+      success: true,
+      dossier: {
+        id: data.public_id,
+        public_id: data.public_id,
+        recordingId: data.recording_id,
+        recording_id: data.recording_id,
+        marketplace: data.marketplace,
+        orderNumber: data.order_number,
+        order_number: data.order_number,
+        trackingCode: data.tracking_code,
+        tracking_code: data.tracking_code,
+        productName: data.product_name,
+        product_name: data.product_name,
+        serialNumber: data.serial_number,
+        serial_number: data.serial_number,
+        recordedAt: data.recorded_at,
+        recorded_at: data.recorded_at,
+        durationSeconds: data.duration_seconds,
+        duration_seconds: data.duration_seconds,
+        originalSha256: data.original_sha256,
+        original_sha256: data.original_sha256,
+        processedSha256: data.processed_sha256,
+        processed_sha256: data.processed_sha256,
+        fileHashSha256: data.processed_sha256,
+        fileSizeBytes: data.file_size_bytes,
+        file_size_bytes: data.file_size_bytes,
+        timezone: data.timezone,
+        timeSource: data.time_source,
+        status: data.status,
+        verificationStatus: 'Registro online confirmado',
+        created_at: data.created_at
+      }
+    });
   } catch (err: any) {
     console.error('Erro na consulta do dossiê:', err);
     return res.status(500).json({ success: false, error: 'Erro ao consultar registro.' });
   }
 });
 
-// AI candidate models with fallback sequence (prioritizing responsive flash-lite)
+// AI candidate models with fallback sequence
 const CANDIDATE_MODELS = ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest'];
 
 async function generateWithFallback(
@@ -656,7 +621,6 @@ async function generateWithFallback(
         ...(systemInstruction ? { systemInstruction } : {})
       });
 
-      // 6-second timeout per attempt to avoid hanging on 503 spikes
       const timeoutPromise = new Promise<never>((_, reject) => 
         setTimeout(() => reject(new Error(`Timeout no modelo ${model}`)), 6000)
       );
@@ -666,7 +630,6 @@ async function generateWithFallback(
         return { text: response.text, modelUsed: model };
       }
     } catch (err: any) {
-      // 503 (model overloaded / high demand) or 429 rate limit
       const errMsg = err?.message || String(err);
       const isTemporaryDemand = errMsg.includes('503') || errMsg.includes('demand') || err?.status === 'UNAVAILABLE';
       if (isTemporaryDemand) {
@@ -733,7 +696,7 @@ ${dossier.verificationUrl || 'https://provapack.app/verificar/' + dossier.id}`;
 }
 
 // AI OCR Analysis of label or serial snapshot
-app.post('/api/ai/ocr-label', async (req: Request, res: Response) => {
+app.post('/api/ai/ocr-label', aiLimiter, async (req: Request, res: Response) => {
   try {
     const { imageBase64, mimeType = 'image/jpeg' } = req.body;
     if (!imageBase64) {
@@ -749,7 +712,6 @@ app.post('/api/ai/ocr-label', async (req: Request, res: Response) => {
       });
     }
 
-    // Strip data URL prefix if present
     const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
 
     const prompt = `Analise esta foto de etiqueta de envio ou identificação de produto de e-commerce brasileiro (Mercado Livre, Shopee, Amazon, Correios, Jadlog, Magalu).
@@ -827,7 +789,7 @@ Retorne EXCLUSIVAMENTE um objeto JSON válido (sem tags markdown de código e se
 });
 
 // AI Dispute Defense Generator
-app.post('/api/ai/dispute-defense', async (req: Request, res: Response) => {
+app.post('/api/ai/dispute-defense', aiLimiter, async (req: Request, res: Response) => {
   try {
     const { dossier, claimType = 'caixa_vazia_ou_item_faltando' } = req.body;
     if (!dossier) {
@@ -880,7 +842,6 @@ DIRETRIZES:
       });
     }
 
-    // Graceful structured defense if AI is unavailable (503 / high demand)
     const fallbackDefense = generateStructuredDefenseTemplate(dossier, claimType);
     return res.json({
       success: true,
