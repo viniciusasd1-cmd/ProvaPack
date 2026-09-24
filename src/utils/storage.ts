@@ -242,15 +242,7 @@ export function saveDossierToStorage(dossier: Dossier): void {
     // 3. Persist safely to localStorage (with quota protection)
     safeSaveUserDossiersToLocalStorage(updated);
 
-    // 4. Update seller quota
-    const seller = loadSellerAccount();
-    if (seller.freeDossiersRemaining > 0) {
-      seller.freeDossiersRemaining -= 1;
-    }
-    seller.usedThisMonth += 1;
-    saveSellerAccount(seller);
-
-    // 5. Notify any active subscribers
+    // 4. Notify any active subscribers (quota is exclusively authorized and updated by the backend)
     notifySubscribers();
   } catch (err) {
     console.error('Falha ao salvar dossiê:', err);
@@ -259,7 +251,7 @@ export function saveDossierToStorage(dossier: Dossier): void {
 
 /**
  * Atualiza um dossiê existente em memória, IndexedDB e localStorage
- * sem alterar a cota do vendedor (freeDossiersRemaining e usedThisMonth permanecem inalterados).
+ * sem alterar a cota do vendedor (o backend é a única autoridade sobre cota).
  */
 export function updateDossierInStorage(dossier: Dossier): void {
   try {
@@ -302,9 +294,9 @@ export function loadSellerAccount(): SellerAccount {
     sellerName: 'Vendedor ProvaPack',
     storeName: 'Minha Loja Online',
     plan: 'Gratuito (10 envios)',
-    freeDossiersRemaining: 8,
+    freeDossiersRemaining: 10,
     monthlyLimit: 10,
-    usedThisMonth: 2,
+    usedThisMonth: 0,
     extraCredits: 0
   };
 

@@ -1,6 +1,7 @@
 import React from 'react';
-import { ShieldCheck, Plus, Search, CreditCard, AlertCircle } from 'lucide-react';
+import { ShieldCheck, Plus, Search, CreditCard, AlertCircle, User as UserIcon, LogOut } from 'lucide-react';
 import { SellerAccount } from '../types';
+import { useAuth } from '../contexts/AuthContext';
 
 interface NavbarProps {
   seller: SellerAccount;
@@ -8,6 +9,7 @@ interface NavbarProps {
   onOpenVerify: () => void;
   onOpenPricing: () => void;
   onOpenStats: () => void;
+  onRequestAuth?: () => void;
   currentView: 'landing' | 'dashboard' | 'recording' | 'public_verify';
   onNavigateHome: () => void;
   onNavigateLanding?: () => void;
@@ -20,9 +22,15 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenVerify,
   onOpenPricing,
   onOpenStats,
+  onRequestAuth,
   currentView,
   onNavigateHome
 }) => {
+  const { user, isAuthenticated, profile, signOut } = useAuth();
+
+  const effectiveRemaining = profile?.freeDossiersRemaining ?? seller.freeDossiersRemaining;
+  const effectivePlan = profile?.plan ?? seller.plan;
+
   return (
     <header className="sticky top-0 z-40 bg-slate-900/90 backdrop-blur-md border-b border-slate-800">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
@@ -73,10 +81,10 @@ export const Navbar: React.FC<NavbarProps> = ({
             <CreditCard className="w-3.5 h-3.5 text-sky-400 shrink-0" />
             <div className="text-left">
               <span className="block font-medium leading-none text-[11px] sm:text-xs">
-                {seller.freeDossiersRemaining > 0 
-                  ? `${seller.freeDossiersRemaining}/10` 
-                  : `${seller.plan}`}
-                <span className="hidden sm:inline">{seller.freeDossiersRemaining > 0 ? ' Grátis' : ''}</span>
+                {effectiveRemaining > 0 
+                  ? `${effectiveRemaining}/10` 
+                  : `${effectivePlan}`}
+                <span className="hidden sm:inline">{effectiveRemaining > 0 ? ' Grátis' : ''}</span>
               </span>
             </div>
             <span className="text-[10px] text-sky-400 font-semibold underline ml-0.5 sm:ml-1 hidden sm:inline">Planos</span>
@@ -92,6 +100,38 @@ export const Navbar: React.FC<NavbarProps> = ({
             <Search className="w-3.5 h-3.5 text-slate-400" />
             <span>Consultar Dossiê</span>
           </button>
+
+          {/* Auth Button */}
+          {isAuthenticated ? (
+            <div className="flex items-center gap-1 sm:gap-2">
+              <div 
+                className="hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800/70 border border-slate-700 text-xs text-slate-300"
+                title={user?.email}
+              >
+                <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <span className="max-w-[120px] truncate">{user?.email?.split('@')[0]}</span>
+              </div>
+              <button
+                onClick={() => signOut()}
+                id="nav-btn-signout"
+                title="Sair da conta"
+                aria-label="Sair da conta"
+                className="p-2 rounded-lg bg-slate-800/60 hover:bg-rose-950/50 hover:text-rose-400 text-slate-400 border border-slate-700/80 transition-colors"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={onRequestAuth}
+              id="nav-btn-auth-login"
+              aria-label="Acessar conta ProvaPack"
+              className="min-h-[40px] flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-sky-300 hover:text-white bg-sky-950/50 hover:bg-sky-900/60 border border-sky-800/80 rounded-lg transition-colors whitespace-nowrap active:scale-98"
+            >
+              <UserIcon className="w-3.5 h-3.5 text-sky-400" />
+              <span>Acessar</span>
+            </button>
+          )}
 
           {/* New Recording Action */}
           {currentView !== 'recording' && (
@@ -111,3 +151,4 @@ export const Navbar: React.FC<NavbarProps> = ({
     </header>
   );
 };
+

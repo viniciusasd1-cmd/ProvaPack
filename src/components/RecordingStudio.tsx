@@ -8,6 +8,7 @@ import { Marketplace, Dossier, CheckpointFrame, SellerAccount, EvidenceRecording
 import { RECORDING_STEPS } from '../data/steps';
 import { calculateBlobSha256, generateDossierId, formatSecondsToTime, formatBrasiliaDate } from '../utils/crypto';
 import { saveDossierToStorage, updateDossierInStorage } from '../utils/storage';
+import { useAuth } from '../contexts/AuthContext';
 import {
   generateRecordingId,
   getTimezoneOffsetString,
@@ -50,6 +51,8 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
   onDossierCreated,
   onPhaseChange
 }) => {
+  const { session, refreshProfile } = useAuth();
+
   // Wizard state: 'setup' | 'recording' | 'processing' | 'error'
   const [phase, setPhase] = useState<'setup' | 'recording' | 'processing' | 'error'>('setup');
 
@@ -720,9 +723,15 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
 
     try {
       setProcessingStatus('Registrando metadados no Supabase...');
+      const authHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+      const authToken = session?.access_token || localStorage.getItem('provapack_backend_session_token');
+      if (authToken) {
+        authHeaders['Authorization'] = `Bearer ${authToken}`;
+      }
+
       const serverRes = await fetch('/api/dossiers', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders,
         body: JSON.stringify({
           id: newDossier.id,
           public_id: newDossier.id,
@@ -748,6 +757,8 @@ export const RecordingStudio: React.FC<RecordingStudioProps> = ({
         if (json.success && json.persistedToSupabase) {
           isPersistedOnline = true;
           onlineNotice = 'Registro online confirmado';
+          // Atualiza cota autorizada pelo servidor
+          refreshProfile().catch(() => {});
         } else {
           isPersistedOnline = false;
           onlineNotice = 'Seus arquivos foram gerados, mas o registro online não foi confirmado.';

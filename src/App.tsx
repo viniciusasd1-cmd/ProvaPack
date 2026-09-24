@@ -6,6 +6,7 @@ import {
 import { Dossier, SellerAccount } from './types';
 import { loadStoredDossiers, loadSellerAccount, saveSellerAccount, subscribeToDossiers } from './utils/storage';
 import { getShowcaseDossier } from './data/productShowcase';
+import { useAuth } from './contexts/AuthContext';
 import { Navbar } from './components/Navbar';
 import { FraudStatsBanner } from './components/FraudStatsBanner';
 import { DossierList } from './components/DossierList';
@@ -15,8 +16,10 @@ import { DisputeDefenseModal } from './components/DisputeDefenseModal';
 import { PricingModal } from './components/PricingModal';
 import { PublicDossierView } from './components/PublicDossierView';
 import { LandingPage } from './components/LandingPage';
+import { AuthModal } from './components/AuthModal';
 
 export default function App() {
+  const { isAuthenticated, profile } = useAuth();
   const [dossiers, setDossiers] = useState<Dossier[]>([]);
   const [seller, setSeller] = useState<SellerAccount>(loadSellerAccount());
   
@@ -30,12 +33,31 @@ export default function App() {
   const [isPricingOpen, setIsPricingOpen] = useState(false);
   const [showStatsBanner, setShowStatsBanner] = useState(true);
 
+  // Auth modal state
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [authModalMessage, setAuthModalMessage] = useState<string | undefined>(undefined);
+  const [pendingAuthAction, setPendingAuthAction] = useState<(() => void) | null>(null);
+
   // Quick lookup search modal
   const [isLookupOpen, setIsLookupOpen] = useState(false);
   const [lookupInput, setLookupInput] = useState('');
 
   // Active recording phase tracking for mobile immersive mode & footer hiding
   const [recordingPhase, setRecordingPhase] = useState<'setup' | 'recording' | 'processing' | 'error'>('setup');
+
+  // Sincroniza estado de cota com perfil autoritativo do servidor Supabase
+  useEffect(() => {
+    if (profile) {
+      setSeller(prev => ({
+        ...prev,
+        plan: (profile.plan as SellerAccount['plan']) || 'Gratuito (10 envios)',
+        freeDossiersRemaining: profile.freeDossiersRemaining,
+        monthlyLimit: profile.monthlyLimit,
+        usedThisMonth: profile.usedThisMonth,
+        extraCredits: profile.extraCredits
+      }));
+    }
+  }, [profile]);
 
   // Initial load & URL check for public verification links
   useEffect(() => {
@@ -65,6 +87,22 @@ export default function App() {
       unsubscribe();
     };
   }, []);
+
+  const handleStartRecording = () => {
+    if (!isAuthenticated) {
+      setAuthModalMessage('Identifique-se com seu e-mail para validar seus 10 envios gratuitos e salvar seu dossiê.');
+      setPendingAuthAction(() => () => setCurrentView('recording'));
+      setIsAuthModalOpen(true);
+    } else {
+      setCurrentView('recording');
+    }
+  };
+
+  const handleOpenAuthModal = (message?: string, onSuccessAction?: () => void) => {
+    setAuthModalMessage(message || 'Informe seu e-mail para salvar seus créditos e acessar sua conta em qualquer dispositivo.');
+    setPendingAuthAction(() => onSuccessAction || null);
+    setIsAuthModalOpen(true);
+  };
 
   const handleUpdateSeller = (updated: SellerAccount) => {
     setSeller(updated);
@@ -105,10 +143,11 @@ export default function App() {
       <div className={currentView === 'recording' && recordingPhase === 'recording' ? 'hidden md:block' : ''}>
         <Navbar
           seller={seller}
-          onNewDossier={() => setCurrentView('recording')}
+          onNewDossier={handleStartRecording}
           onOpenVerify={() => setIsLookupOpen(true)}
           onOpenPricing={() => setIsPricingOpen(true)}
           onOpenStats={() => setShowStatsBanner(true)}
+          onRequestAuth={() => handleOpenAuthModal('Acesse sua conta com seu e-mail para consultar seus créditos e envios.')}
           currentView={currentView}
           onNavigateHome={() => setCurrentView('landing')}
           onNavigateLanding={() => setCurrentView('landing')}
@@ -124,7 +163,7 @@ export default function App() {
       }`}>
         {currentView === 'landing' && (
           <LandingPage
-            onStartTrial={() => setCurrentView('recording')}
+            onStartTrial={handleStartRecording}
             onViewDemoDossier={(demoId) => {
               const currentList = loadStoredDossiers();
               setDossiers(currentList);
@@ -132,7 +171,7 @@ export default function App() {
               if (target) {
                 setSelectedDossier(target);
               } else {
-                setCurrentView('recording');
+                handleStartRecording();
               }
             }}
             onOpenPricing={() => setIsPricingOpen(true)}
@@ -190,7 +229,7 @@ export default function App() {
 
               <div className="shrink-0 flex sm:flex-col gap-2 w-full sm:w-auto">
                 <button
-                  onClick={() => setCurrentView('recording')}
+                  onClick={handleStartRecording}
                   id="hero-btn-new-recording"
                   className="flex-1 sm:flex-none px-5 py-3 rounded-2xl bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-sky-500/25 active:scale-95 transition-all"
                 >
@@ -249,7 +288,7 @@ export default function App() {
                 dossiers={dossiers}
                 onSelectDossier={(d) => setSelectedDossier(d)}
                 onOpenDispute={(d) => setDisputeDossier(d)}
-                onNewDossier={() => setCurrentView('recording')}
+                onNewDossier={handleStartRecording}
               />
             </div>
           </div>
@@ -301,6 +340,7 @@ export default function App() {
         onClose={() => setIsPricingOpen(false)}
         seller={seller}
         onUpdateSeller={handleUpdateSeller}
+        onRequestAuth={() => handleOpenAuthModal('Acesse sua conta com seu e-mail para consultar seus créditos e planos.')}
       />
 
       {/* 4. Quick ID / Hash Lookup Dialog */}
@@ -339,6 +379,23 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* 5. Passwordless E-mail + OTP Authentication Modal (MVP-02A) */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => {
+          setIsAuthModalOpen(false);
+          setPendingAuthAction(null);
+        }}
+        initialMessage={authModalMessage}
+        onSuccess={() => {
+          setIsAuthModalOpen(false);
+          if (pendingAuthAction) {
+            pendingAuthAction();
+            setPendingAuthAction(null);
+          }
+        }}
+      />
     </div>
   );
 }

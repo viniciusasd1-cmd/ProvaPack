@@ -1,50 +1,47 @@
 import React, { useState } from 'react';
-import { X, Check, Zap, Shield, Sparkles, CreditCard, ChevronRight, ArrowLeft } from 'lucide-react';
+import { X, Check, Zap, Shield, Sparkles, CreditCard, ChevronRight, ArrowLeft, Lock, Info } from 'lucide-react';
 import { SellerAccount } from '../types';
 import { PRICING_TIERS } from '../data/steps';
+import { useAuth } from '../contexts/AuthContext';
 
 interface PricingModalProps {
   isOpen: boolean;
   onClose: () => void;
   seller: SellerAccount;
-  onUpdateSeller: (seller: SellerAccount) => void;
+  onUpdateSeller?: (seller: SellerAccount) => void;
+  onRequestAuth?: () => void;
 }
 
 export const PricingModal: React.FC<PricingModalProps> = ({
   isOpen,
   onClose,
   seller,
-  onUpdateSeller
+  onRequestAuth
 }) => {
-  const [successNotice, setSuccessNotice] = useState<string | null>(null);
+  const { isAuthenticated } = useAuth();
+  const [notice, setNotice] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
   const handleSelectTier = (tierId: string) => {
-    let updated = { ...seller };
-    if (tierId === 'pro_monthly') {
-      updated.plan = 'Pro (50 envios)';
-      updated.monthlyLimit = 50;
-      updated.freeDossiersRemaining = 50;
-      setSuccessNotice('Assinatura do Plano Pro (R$ 29,90/mês) ativada com sucesso! Limite renovado para 50 envios.');
-    } else if (tierId === 'volume_monthly') {
-      updated.plan = 'Alto Volume (Ilimitado)';
-      updated.monthlyLimit = 9999;
-      updated.freeDossiersRemaining = 9999;
-      setSuccessNotice('Assinatura Alto Volume (R$ 79,90/mês) ativada! Envios sem restrição liberados.');
-    } else if (tierId === 'extra_credits') {
-      updated.extraCredits = (updated.extraCredits || 0) + 5;
-      updated.freeDossiersRemaining = (updated.freeDossiersRemaining || 0) + 5;
-      setSuccessNotice('+5 Créditos avulsos adicionados à sua conta (R$ 9,90). Não expiram.');
-    } else {
-      updated.plan = 'Gratuito (10 envios)';
-      setSuccessNotice('Plano Degustação ativo.');
+    // 1. Se usuário não estiver autenticado, abrir AuthModal primeiro
+    if (!isAuthenticated) {
+      if (onRequestAuth) {
+        onRequestAuth();
+      }
+      return;
     }
 
-    onUpdateSeller(updated);
+    // 2. Se já autenticado, NÃO ativar plano no navegador (checkout em etapa comercial posterior)
+    if (tierId === 'free') {
+      setNotice('Sua conta já possui 10 ProvaPacks gratuitos válidos garantidos pelo servidor.');
+    } else {
+      setNotice('A integração de checkout (PIX / Cartão) está em fase final de homologação (MVP-02B). Sua conta atual já está ativa com os 10 envios gratuitos!');
+    }
+
     setTimeout(() => {
-      setSuccessNotice(null);
-    }, 4000);
+      setNotice(null);
+    }, 6000);
   };
 
   return (
@@ -104,10 +101,10 @@ export const PricingModal: React.FC<PricingModalProps> = ({
           </div>
         </div>
 
-        {successNotice && (
-          <div className="mt-4 p-3 rounded-xl bg-emerald-950/80 border border-emerald-800/80 text-emerald-300 text-xs flex items-center gap-2">
-            <Check className="w-4 h-4 shrink-0 text-emerald-400" />
-            <span>{successNotice}</span>
+        {notice && (
+          <div className="mt-4 p-3 rounded-xl bg-sky-950/80 border border-sky-800/80 text-sky-300 text-xs flex items-center gap-2">
+            <Info className="w-4 h-4 shrink-0 text-sky-400" />
+            <span>{notice}</span>
           </div>
         )}
 
